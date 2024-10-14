@@ -1,103 +1,147 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 
-from database.models import Event, Online
+from database.models import User, Telegram_ID
+
+"""Добавление в бд нового участника"""
 
 
-async def orm_add_event(session: AsyncSession, data: dict):
-    obj = Event(
+async def add_user(session: AsyncSession, data: dict):
+    obj = User(
+        telegram_id=data['telegram_id'],
+        telegram_login=data['telegram_login'],
         name=data['name'],
-        data_start=data['data_start'],
-        data_finish=data['data_finish'],
-        pick_up_data=data['pick_up_data'],
-        distance=data['distance']
+        phone=data['phone'],
+        email=data['email'],
     )
     session.add(obj)
     await session.commit()
 
 
-async def orm_get_events(session: AsyncSession):
-    query = select(Event)
+"""Выгрузка всех Telegram ID участников"""
+
+
+async def get_users_all(session: AsyncSession):
+    query = select(Telegram_ID.telegram_id)
     result = await session.execute(query)
-    return result.scalars().all()
+    user_ids = [row[0] for row in result.fetchall()]
+    return user_ids
 
 
-async def orm_get_event(session: AsyncSession, product_id: int):
-    query = select(Event).where(Event.id == product_id)
+"""Проверка на наличие Telegram ID"""
+
+
+async def get_user_unique(session: AsyncSession, telegram_id: int):
+    query = select(func.count(User.telegram_id)).where(User.telegram_id == telegram_id)
+    result = await session.execute(query)
+    user_count = result.scalars().all()
+    print(f'user_count={user_count[0]}')
+    if user_count[0] == 0:
+        return False
+    else:
+        return True
+
+
+"""Выгрузка информации про участника по Telegram ID"""
+
+
+async def get_user(session: AsyncSession, telegram_id: int):
+    query = select(User).where(User.telegram_id == telegram_id)
+    result = await session.execute(query)
+    user = result.scalars().first()
+    return user
+
+
+"""Выгрузка информации про участника по login"""
+
+
+async def get_user_login(session: AsyncSession, telegram_login):
+    query = select(User).where(User.telegram_login == telegram_login)
+    result = await session.execute(query)
+    user = result.scalars().first()
+    return user
+
+
+"""Выгрузка информации про участника по id записи"""
+
+
+async def get_user_id(session: AsyncSession, id_user):
+    query = select(User).where(User.id == id_user)
+    result = await session.execute(query)
+    user = result.scalars().first()
+    return user
+
+
+async def get_user_for_change(session: AsyncSession, telegram_id: int):
+    query = select(User).where(User.telegram_id == telegram_id)
     result = await session.execute(query)
     return result.scalar()
 
 
-async def orm_update_event(session: AsyncSession, product_id: int, data):
-    query = update(Event).where(Event.id == product_id).values(
+"""Изменение данных участника"""
+
+
+async def update_user(session: AsyncSession, telegram_id: int, data):
+    query = update(User).where(User.id == telegram_id).values(
+        telegram_id=data['telegram_id'],
         name=data['name'],
-        data_start=data['data_start'],
-        data_finish=data['data_finish'],
-        pick_up_data=data['pick_up_data'],
-        distance=data['distance']
+        phone=data['phone'],
+        email=data['email'], )
+    await session.execute(query)
+    await session.commit()
+
+
+"""Изменение результатов участника за 1ый день"""
+
+
+async def update_user_1(session: AsyncSession, telegram_id: int, data):
+    query = update(User).where(User.telegram_id == telegram_id).values(
+        distance_1=data['distance_1'],
+        photo_1=data['photo_1'],
+        story_1=data['story_1'],
+        date_1=data['date_1'],
+    )
+
+    await session.execute(query)
+    await session.commit()
+
+
+"""Изменение результатов участника за 2ый день"""
+
+
+async def update_user_2(session: AsyncSession, telegram_id: int, data):
+    query = update(User).where(User.telegram_id == telegram_id).values(
+        distance_2=data['distance_2'],
+        photo_2=data['photo_2'],
+        story_2=data['story_2'],
+        date_2=data['date_2'],
     )
     await session.execute(query)
     await session.commit()
 
 
-async def orm_delete_event(session: AsyncSession, product_id: int):
-    query = delete(Event).where(Event.id == product_id)
-    await session.execute(query)
-    await session.commit()
+"""Изменение результатов участника за 3ый день"""
 
 
-async def orm_add_online(session: AsyncSession, data: dict):
-    obj = Online(
-        id_user=data['id_user'],
-        distance=data['distance'],
-        photo=data['photo'],
-        participants_name=data['participants_name'],
-        recipient_name=data['recipient_name'],
-        phone=data['phone'],
-        delivery=data['delivery'],
+async def update_user_3(session: AsyncSession, telegram_id: int, data):
+    query = update(User).where(User.telegram_id == telegram_id).values(
+        distance_3=data['distance_3'],
+        photo_3=data['photo_3'],
+        date_3=data['date_3'],
+        story_3=data['story_3'],
+        index=data['index'],
         city=data['city'],
         address=data['address'],
-        code=data['code']
-    )
-    session.add(obj)
-    await session.commit()
-
-async def orm_get_online_all(session: AsyncSession):
-    query = select(Online)
-    result = await session.execute(query)
-
-    return result.scalars().all()
-
-async def orm_get_online(session: AsyncSession, id_user: int):
-    query = select(Online).where(Online.id_user == id_user)
-    result = await session.execute(query)
-    return result.scalars().all()
-
-
-async def orm_get_online_for_change(session: AsyncSession, id_online: int):
-    query = select(Online).where(Online.id == id_online)
-    result = await session.execute(query)
-    return result.scalar()
-
-
-async def orm_update_online(session: AsyncSession, id_user: int, data):
-    query = update(Online).where(Online.id == id_user).values(
-        id_user=data['id_user'],
-        distance=data['distance'],
-        photo=data['photo'],
-        participants_name=data['participants_name'],
-        recipient_name=data['recipient_name'],
-        phone=data['phone'],
-        delivery=data['delivery'],
-        city=data['city'],
-        address=data['address'],
-        code=data['code']
+        result=data['result'],
     )
     await session.execute(query)
     await session.commit()
 
 
-async def orm_delete_online(session: AsyncSession, id_online: int):
-    query = delete(Online).where(Online.id == id_online)
+"""Удаление данных участника"""
+
+
+async def delete_user(session: AsyncSession, telegram_id: int):
+    query = delete(User).where(User.id == telegram_id)
     await session.execute(query)
     await session.commit()

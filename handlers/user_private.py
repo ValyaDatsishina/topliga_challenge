@@ -1,386 +1,575 @@
-from datetime import datetime, date
+from datetime import datetime
 
 from aiogram import F, Router, types
-from aiogram.filters import Command, StateFilter, or_f, CommandStart
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from handlers.chat_types import ChatTypeFilter, IsAdmin
-from database.orm_query import orm_get_events, orm_add_online, orm_get_event, orm_get_online, orm_delete_online, \
-    orm_get_online_for_change, orm_update_online
-from handlers.keyboards import get_keyboard, get_keyboard_list
-from handlers.keyboards_inline import get_callback_btns, get_url_btns
+from handlers.chat_types import ChatTypeFilter
+from database.orm_query import add_user, update_user_1, update_user_2, update_user_3, get_user, \
+    get_user_unique
+from handlers.keyboards import get_keyboard
 
 user_router = Router()
 user_router.message.filter(ChatTypeFilter(["private"]))
 
-USER_KB = get_keyboard("Мои результаты",
-                       "Зарегистрировать результат",
+START_KB = get_keyboard("Зарегистрироваться",
+                        placeholder="Выберите действие",
+                        )
+
+DAY1_KB = get_keyboard("Добавить результаты первого дня",
                        placeholder="Выберите действие",
-                       sizes=(1, 1),
                        )
 
-DELIVERY_KB = get_keyboard("Заберу в магазине TOP LIGA RUN в Краснодаре",
-                           "Отправить СДЭКом",
-                           placeholder="Выберите действие",
-                           sizes=(1, 1),
-                           )
+DAY2_KB = get_keyboard("Добавить результаты второго дня",
+                       placeholder="Выберите действие",
+                       )
+
+DAY3_KB = get_keyboard("Добавить результаты третьего дня",
+                       placeholder="Выберите действие",
+                       )
+
+CHECK_KB = get_keyboard("Показать мой результат",
+                        placeholder="Выберите действие", )
+
+ALL_KB = get_keyboard("Зарегистрироваться",
+                      "Добавить результаты первого дня",
+                      "Добавить результаты второго дня",
+                      "Добавить результаты третьего дня",
+                      placeholder="Выберите действие",
+                      sizes=(1, 1, 1, 1)
+                      )
+
+"""Шаги состояний (FSM)"""
 
 
-class AddResult(StatesGroup):
-    # Шаги состояний
-    event = State()
-    distance = State()
-    photo = State()
-    participants_name = State()
-    recipient_name = State()
+class AddUser(StatesGroup):
+    name = State()
     phone = State()
-    delivery = State()
-    city = State()
-    address = State()
-    code = State()
-
-    product_for_change = None
+    email = State()
 
     texts = {
-        'AddProduct:distance': 'Введите дистанцию из списка:',
-        'AddProduct:photo': 'Загрузите фото заново:',
-        'AddProduct:participants_name': 'Введите ФИО участника заново:',
-        'AddProduct:phone': 'Введите номер телефона заново:',
-        'AddProduct:delivery': 'Введите тип доставки заново:',
-        'AddProduct:recipient_name': 'Введите ФИО получателя заново:',
-        'AddProduct:city': 'Введите город заново:',
-        'AddProduct:address': 'Введите адрес заново:',
-        'AddProduct:code': 'Введите код пункта выдачи заново:',
+        'AddUser:name': 'Введите имя заново:',
+        'AddUser:phone': 'Введите номер телефона заново:',
+        'AddUser:email': 'Введите адрес электронной почты заново:', }
+
+
+class AddResult_1(StatesGroup):
+    distance_1 = State()
+    photo_1 = State()
+    story_1 = State()
+    date_1 = State()
+
+    texts = {
+        'AddResult_1:photo_1': 'Загрузите фото заново:',
+        'AddResult_1:distance_1': 'Введите дистанцию в километрах',
+        'AddResult_1:story_1': 'Загрузите фото заново:', }
+
+
+class AddResult_2(StatesGroup):
+    distance_2 = State()
+    photo_2 = State()
+    story_2 = State()
+    date_2 = State()
+
+    texts = {
+        'AddResult_2:photo_2': 'Загрузите фото заново:',
+        'AddResult_2:distance_2': 'Введите дистанцию в километрах',
+        'AddResult_2:story_2': 'Загрузите фото заново:', }
+
+
+class AddResult_3(StatesGroup):
+    distance_3 = State()
+    photo_3 = State()
+    story_3 = State()
+    date_3 = State()
+    index = State()
+    city = State()
+    address = State()
+    result = State()
+
+    field_for_change = None
+
+    texts = {
+        'AddResult_3:photo_3': 'Загрузите фото заново:',
+        'AddResult_3:distance_3': 'Введите дистанцию в километрах',
+        'AddResult_3:story_3': 'Загрузите фото заново:',
+        'AddResult_3:index': 'Введите индекс заново:',
+        'AddResult_3:city': 'Введите город заново:',
+        'AddResult_3:address': 'Введите адрес заново:',
     }
 
 
-@user_router.message(StateFilter(None), or_f(Command("start"), F.text == "Зарегистрировать результат"))
-async def user_start(message: types.Message, state: FSMContext, session: AsyncSession):
-    events = await orm_get_events(session)
-    btns = {event.name: str(event.id) for event in events}
-    # print(btns)
-    await message.answer(f'Поздравляем вас с финишем Онлайн-забега! '
-                         f'\nЗдесь вы можете загрузить свой результат, '
-                         f'чтобы мы могли отправить вам стартовый пакет с заслуженной медалью '
-                         f'\nПодготовьте скриншот трека вашего забега, а также адрес удобного офиса СДЭК.'
-                         f'Если сделали ошибку при вводе данных введите "назад", чтобы вернуться на шаг назад.'
-                         f'Чтобы отменить загрузку результата введите "отмена".')
-    await message.answer(f"Выберите мероприятие", reply_markup=get_callback_btns(btns=btns))
-    await state.set_state(AddResult.event)
+"""Начало кода"""
 
 
-@user_router.message(F.text == "Мои результаты")
-async def starring_at_product(message: types.Message, session: AsyncSession):
-    user = message.from_user
-    result = await orm_get_online(session, user.id)
-    for result in await orm_get_online(session, user.id):
-        await message.answer_photo(
-            result.photo,
-            caption=f"Участник: {result.participants_name} "
-                    f"\nПолучатель: {result.recipient_name}"
-                    f"\nТелефон: {result.phone}"
-                    f"\n Способ доставки: {result.delivery}"
-                    f"\n Город: {result.city}"
-                    f"\n Адрес: {result.address}"
-                    f"\n Код выдачи: {result.code}",
-            reply_markup=get_callback_btns(
-                btns={
-                    "Удалить": f"deleteresult_{result.id}",
-                    "Изменить": f"changeresult_{result.id}",
-                }
-            ),
-        )
-
-
-@user_router.callback_query(F.data.startswith("deleteresult_"))
-async def delete_online_callback(callback: types.CallbackQuery, session: AsyncSession):
-    id_online = callback.data.split("_")[-1]
-    await orm_delete_online(session, int(id_online))
-    await callback.answer("Товар удален")
-    await callback.message.answer("Товар удален!")
-
-
-# Становимся в состояние ожидания ввода name
-@user_router.callback_query(StateFilter(None), F.data.startswith("changeresult_"))
-async def change_online_callback(
-        callback: types.CallbackQuery, state: FSMContext, session: AsyncSession
-):
-    id_online = callback.data.split("_")[-1]
-    product_for_change = await orm_get_online_for_change(session, int(id_online))
-
-    AddResult.product_for_change = product_for_change
-
-    events = await orm_get_events(session)
-    btns = {event.name: str(event.id) for event in events}
-    await callback.answer()
-    await callback.message.answer(f"Для того чтобы оставить пункт без изменения введите .")
-    await callback.message.answer("Выберите мероприятие", reply_markup=get_callback_btns(btns=btns))
-    await state.set_state(AddResult.event)
-
-
-@user_router.message(StateFilter('*'), Command("отмена"))
-@user_router.message(StateFilter('*'), F.text.casefold() == "отмена")
+@user_router.message(State('*'), or_f(Command("cancel"), F.text.lower() == "отмена"))
 async def cancel_handler(message: types.Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
-    if current_state is None:
-        return
-    if AddResult.product_for_change:
-        AddResult.product_for_change = None
     await state.clear()
-    await message.answer("Действия отменены", reply_markup=USER_KB)
+    await message.answer("Действия отменены", reply_markup=ALL_KB)
 
 
-# Вернутся на шаг назад (на прошлое состояние)
-@user_router.message(StateFilter('*'), Command("назад"))
-@user_router.message(StateFilter('*'), F.text.casefold() == "назад")
-async def back_step_handler(message: types.Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
+@user_router.message(StateFilter(None), or_f(Command("start"), F.text == "Участвовать в челлендже",
+                                             F.text == "Зарегистрироваться"))
+async def user_start(message: types.Message, state: FSMContext, session: AsyncSession):
+    telegram_id = message.from_user.id
+    is_user_exist = await get_user_unique(session, telegram_id)
+    if is_user_exist:
+        user = await get_user(session, telegram_id)
+        await message.answer(f'Вы уже зарегистрированы!')
+        if not user.distance_1:
+            await message.answer(f'Но вы не добавили результаты первого дня челленджа.', reply_markup=DAY1_KB)
+        elif not user.distance_2:
+            await message.answer(f'Но вы не добавили результаты второго дня челленджа.', reply_markup=DAY2_KB)
+        elif not user.distance_3:
+            await message.answer(f'Но вы не добавили результаты третьего дня челленджа.', reply_markup=DAY3_KB)
+        else:
+            await message.answer(f"{user.name}, поздравляем вас с окончанием челленджа ☀️"
+                                 f"\nВ первый день вы преодалели {user.distance_1} км"
+                                 f"\nВо второй день: {user.distance_2} км"
+                                 f"\nВ третий день: {user.distance_3} км"
+                                 f"\nОбщий результат: {user.result} км"
+                                 f"\nОтличный результат, так держать!")
 
-    if current_state == AddResult.recipient_name:
-        await message.answer('Предыдущего шага нет, напишите "отмена"')
+    else:
+        await message.answer(f'Мы рады видеть вас на заключительном челлендже ANTA Сочи Марафон!\n'
+                             f'\nНапоминаем условия челленджа:'
+                             f'\n1. Выходить на пробежку каждый день с 11 по 13 октября;'
+                             f'\n2. Присылать трек пробежки в тот же день в этот чат-бот;'
+                             f'\n3. Подписаться на [страницу VK спортивного бренда ANTA](https://vk.com/anta_official);'
+                             f'\n4. Выкладывать сториз о пробежках в любых соц сетях или мессенджерах с текстом: '
+                             f'*готовлюсь к ANTA Сочи Марафону*🌴', parse_mode='Markdown')
+        await message.answer(
+            f'Если вы допустили ошибку при вводе данных, нажмите /cancel и начните сначала.\n'
+            f'\nВ меню, рядом со строчкой ввода текста, вы можете увидеть все доступные команды, '
+            f'но просим вас добавлять записи тренировок по порядку, чтобы итоговый результат посчитался верно.')
+        await message.answer(f'Для участия нужно зарегистрироваться. \nВведите ваше Имя')
+        await state.set_state(AddUser.name)
+
+
+@user_router.message(AddUser.name, or_f(F.text, F.text == "."))
+async def add_name(message: types.Message, state: FSMContext):
+    if '/' in message.text or 'зарегистрироваться' in message.text.lower():
+        await message.answer(f'Введите Имя еще раз')
         return
-
-    previous = None
-    for step in AddResult.__all_states__:
-        if step.state == current_state:
-            await state.set_state(previous)
-            await message.answer(f"Ок, вы вернулись к прошлому шагу \n {AddResult.texts[previous.state]}")
-            return
-        previous = step
-
-
-@user_router.callback_query(AddResult.event)
-async def add_event(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
-    events = await orm_get_events(session)
-    # ты пытаешься строку 'changeresult_3' привести к типу целочисленного значения
-    print(callback)
-    if int(callback.data) in [event.id for event in events]:
-        await callback.answer()
-        # await state.update_data(event=event.name)
-        event = await orm_get_event(session, int(callback.data))
-        await state.update_data(event=callback.data)
-        btns = event.distance
-        DISTANCE_KB = get_keyboard_list(btns,
-                                        placeholder="Выберите действие",
-                                        sizes=(1, 2, 2),
-                                        )
-
-        await callback.message.answer(f"Поздравляем с финишем онлайн забега {event.name}!\n"
-                                      f"Какую дистанцию вы преодолели?", reply_markup=DISTANCE_KB)
-        await state.set_state(AddResult.distance)
     else:
-        await callback.message.answer('Выберите мероприятие из кнопок.')
-        await callback.answer()
+        await state.update_data(name=message.text)
+        user = message.from_user
+        await state.update_data(telegram_id=user.id)
+        await state.update_data(telegram_login=user.username)
+        # else:
+        #     await state.update_data(telegram_login='неизвестный атлет')
+        await message.answer("Введите номер телефона в формате 7хххххххххх (без '+')")
+        await state.set_state(AddUser.phone)
 
 
-@user_router.message(AddResult.distance, or_f(F.text, F.text == "."))
-async def add_distance(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(distence=AddResult.product_for_change.distance)
-    else:
-        await state.update_data(distance=message.text)
-    await message.answer("Отправьте скриншот/фото с подтверждением результата (загрузите только 1 изображение)")
-    await state.set_state(AddResult.photo)
+@user_router.message(AddUser.name)
+async def name_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите Имя заново")
 
 
-@user_router.message(AddResult.distance)
-async def add_distance2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, введите дистанцию заново")
-
-
-@user_router.message(AddResult.photo, or_f(F.photo, F.text == "."))
-async def add_photo(message: types.Message, state: FSMContext):
-    if message.text and message.text == "." and AddResult.product_for_change:
-        await state.update_data(photo=AddResult.product_for_change.photo)
-    else:
-        await state.update_data(photo=message.photo[-1].file_id)
-    await message.answer("Введите ФИО участника")
-    await state.set_state(AddResult.participants_name)
-
-
-@user_router.message(AddResult.photo)
-async def add_photo2(message: types.Message, state: FSMContext):
-    await message.answer("Отправьте скриншот забега")
-
-
-@user_router.message(AddResult.participants_name, or_f(F.text, F.text == "."))
-async def add_participants_name(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(participants_name=AddResult.product_for_change.participants_name)
-    else:
-        await state.update_data(participants_name=message.text)
-    await message.answer("Введите номер телефона в формате 7хххххххххх (без '+')")
-    await state.set_state(AddResult.phone)
-
-
-@user_router.message(AddResult.participants_name)
-async def add_participants_name2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, введите ФИО заново")
-
-
-@user_router.message(AddResult.phone, or_f(F.text, F.text == "."))
+@user_router.message(AddUser.phone, or_f(F.text, F.text == "."))
 async def add_phone(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(phone=AddResult.product_for_change.phone)
-    else:
-        try:
-            int(message.text)
-            if len(message.text) != 11:
-                raise Exception('incorrect phone number length')
-        except ValueError:
-            await message.answer("Введите номер телефона без дополнительных символов")
-            return
-        except Exception:
-            await message.answer("Некорректная длина номер телефона, введите номер телефона еще раз")
-            return
+    try:
+        int(message.text)
+        if len(message.text) != 11:
+            raise Exception('incorrect phone number length')
+    except ValueError:
+        await message.answer("Введите номер телефона без дополнительных символов")
+
+        return
+    except Exception:
+        await message.answer("Некорректная длина номер телефона, введите номер телефона еще раз")
+        return
     await state.update_data(phone=message.text)
 
-    await message.answer("Как вам удобно будет забрать стартовый пакет", reply_markup=DELIVERY_KB)
-    await state.set_state(AddResult.delivery)
+    await message.answer("Введите email")
+    await state.set_state(AddUser.email)
 
 
-@user_router.message(AddResult.phone)
-async def add_phone2(message: types.Message, state: FSMContext):
+@user_router.message(AddUser.phone)
+async def phone_validation(message: types.Message, state: FSMContext):
     await message.answer("Вы ввели не допустимые данные, введите номер телефона заново")
 
 
-@user_router.message(AddResult.delivery, or_f(F.text, F.text == "."))
-async def add_delivery(message: types.Message, state: FSMContext, session: AsyncSession):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(delivery=AddResult.product_for_change.delivery)
-    elif message.text == "Отправить СДЭКом":
-        await state.update_data(delivery=message.text)
-        await message.answer("Укажите ФИО получателя стартового пакета")
-        await state.set_state(AddResult.recipient_name)
-    else:
-        user = message.from_user
-        await state.update_data(delivery=message.text)
-        await state.update_data(recipient_name='Забрать пакет можно по фамилии участника')
-        await state.update_data(city='Краснодар')
-        await state.update_data(address='ул. Кубанская Набережная 1/о')
-        await state.update_data(code='')
-        await state.update_data(id_user=user.id)
-        data = await state.get_data()
+@user_router.message(AddUser.email, or_f(F.text, F.text == "."))
+async def add_email(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.update_data(email=message.text)
+    data = await state.get_data()
+    try:
+        await add_user(session, data)
+        await message.answer("Отлично, вы зарегистированы!"
+                             "\nВперед на пробежку! "
+                             "Не забудьте записать трек тренировки, а также сделать сториз с текстом: "
+                             "*готовлюсь к ANTA Сочи Марафону*"
+                             "\nЕсли вы выкладываете историю в Instagram, отмечайте @topligarun.",
+                             reply_markup=DAY1_KB, parse_mode='Markdown')
 
-        event = await orm_get_event(session, int(data['event']))
-        await message.answer(f"Забрать стартовый пакет можно после {event.pick_up_data.strftime("%d.%m")} "
-                             f"в магазине TOP LIGA RUN на Кубанской набережной 1/о", reply_markup=USER_KB)
-        # await message.answer(str(data))
-        try:
+        await message.answer("Нажмите команду /day_1 или кнопку, чтобы добавить первую пробежку",
+                             reply_markup=DAY1_KB)
 
-            if AddResult.product_for_change:
-                await orm_update_online(session, AddResult.product_for_change.id, data)
-                await message.answer("Результат изменен", reply_markup=USER_KB)
-            else:
-                await orm_add_online(session, data)
-                await message.answer("Результат добавлен", reply_markup=USER_KB)
-                await message.answer(f'Посмотреть, изменить или удалить результат можно нажав \b"Мои результаты"\b'
-                                     f'\nНажмите \b"загрузить результат"\b, если хотите загрузить результат за другого участника',
-                                     reply_markup=USER_KB)
-            await state.clear()
-
-        except Exception as e:
-            await message.answer(
-                f"Ошибка: \n{str(e)}\n. Попробуйте снова.",
-                reply_markup=USER_KB,
-            )
-            await state.clear()
+    except Exception as e:
+        await message.answer(
+            f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
+            f"по нему потом будет составляться турнирная таблица."
+            f"\nДобавьте имя пользователя в профиле и попробуйте снова.",
+            reply_markup=START_KB,
+        )
         await state.clear()
-        AddResult.product_for_change = None
+
+    await state.clear()
 
 
-@user_router.message(AddResult.delivery)
-async def add_delivery2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, выбирете один из вариантов на клавиатуре")
+@user_router.message(AddUser.email)
+async def email_validation(message: types.Message, state: FSMContext):
+    await message.answer("Вы ввели не допустимые данные, введите почту заново")
 
-@user_router.message(AddResult.recipient_name, or_f(F.text, F.text == "."))
-async def add_recipient_name(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(recipient_name=AddResult.product_for_change.recipient_name)
+
+"""Запись первого дня челленджа"""
+
+
+@user_router.message(StateFilter(None), or_f(Command("day_1"), F.text == "Добавить результаты первого дня"))
+async def add_result_1(message: types.Message, state: FSMContext, session: AsyncSession):
+    telegram_id = message.from_user.id
+    is_user_exist = await get_user_unique(session, telegram_id)
+    if is_user_exist:
+        await message.answer(f"Отправьте скриншот пробежки первого дня (загрузите только 1 изображение)")
+        await state.set_state(AddResult_1.photo_1)
     else:
-
-        await state.update_data(recipient_name=message.text)
-    await message.answer("Укажите город доставки")
-    await state.set_state(AddResult.city)
-
-
-@user_router.message(AddResult.recipient_name)
-async def add_recipient_name2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, введите ФИО заново")
+        await message.answer("Вы еще не зарегистрировались. "
+                             "\nПопробуйте начать сначала",
+                             reply_markup=START_KB)
 
 
-@user_router.message(AddResult.city, or_f(F.text, F.text == "."))
+@user_router.message(AddResult_1.photo_1, or_f(F.photo, F.text == "."))
+async def add_photo_1(message: types.Message, state: FSMContext):
+    await state.update_data(photo_1=message.photo[-1].file_id)
+    await message.answer("Какую дистанцию вы пробежали в километрах?"
+                         "\nУкажите только число через точку(например 21.1)")
+    await state.set_state(AddResult_1.distance_1)
+
+
+@user_router.message(AddResult_1.photo_1)
+async def photo_1_validation(message: types.Message):
+    await message.answer("Отправьте скриншот забега, только одно изображение.")
+
+
+@user_router.message(AddResult_1.distance_1, or_f(F.text, F.text == "."))
+async def add_distance_1(message: types.Message, state: FSMContext):
+    try:
+        float(message.text)
+    except ValueError:
+        await message.answer("Пишите дистанцию через точку в километрах. "
+                             "Другие символы не используйте, пожалуйста."
+                             "\n(Например 21.1)")
+        return
+    await state.update_data(distance_1=float(message.text))
+    await message.answer("Отправьте скриншот сториз о пробежке первого дня."
+                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
+                         "в любых соц сетях или мессенджерах.")
+    await state.set_state(AddResult_1.story_1)
+
+
+@user_router.message(AddResult_1.distance_1)
+async def distance_1_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите дистанцию заново")
+
+
+@user_router.message(AddResult_1.story_1, or_f(F.photo))
+async def add_story_1(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.update_data(story_1=message.photo[-1].file_id)
+    await state.update_data(date_1=datetime.now())
+    telegram_id = int(message.from_user.id)
+    data = await state.get_data()
+    print(f'telegram_id = {telegram_id}, data = {data}')
+
+    try:
+        await update_user_1(session, telegram_id, data)
+        await message.answer("Первый день есть! \nДарим вам промокод на скидку для ваших друзей - "
+                             "приезжайте на старт командой ⚡️ "
+                             "Выкладывайте его в стори с фото пробежки завтра.\n *START*", reply_markup=DAY2_KB,
+                             parse_mode='Markdown')
+        await message.answer("Нажмите команду /day_2 или кнопку, чтобы добавить вторую пробежку",
+                             reply_markup=DAY2_KB)
+
+    except Exception as e:
+        await message.answer(
+            f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
+            f"по нему потом будет составляться турнирная таблица."
+            f"\nДобавьте имя пользователя в профиле и попробуйте снова.",
+            reply_markup=DAY1_KB,
+        )
+        await state.clear()
+    await state.clear()
+
+
+@user_router.message(AddResult_1.story_1)
+async def story_1_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, отправьте изображение заново")
+
+
+"""Запись второго дня челленджа"""
+
+
+@user_router.message(StateFilter(None), or_f(Command("day_2"), F.text == "Добавить результаты второго дня"))
+async def add_result_2(message: types.Message, state: FSMContext, session: AsyncSession):
+    telegram_id = message.from_user.id
+
+    is_user_exist = await get_user_unique(session, telegram_id)
+    if is_user_exist:
+        await message.answer(f"Отправьте скриншот пробежки второго дня (загрузите только 1 изображение)")
+        await state.set_state(AddResult_2.photo_2)
+    else:
+        await message.answer("Вы еще не зарегистрировались. "
+                             "\nПопробуйте начать сначала",
+                             reply_markup=START_KB)
+
+
+@user_router.message(AddResult_2.photo_2, or_f(F.photo, F.text == "."))
+async def add_photo_2(message: types.Message, state: FSMContext):
+    await state.update_data(photo_2=message.photo[-1].file_id)
+    await message.answer("Какую дистанцию вы пробежали в километрах?"
+                         "\nУкажите только число через точку(например 21.1)")
+    await state.set_state(AddResult_2.distance_2)
+
+
+@user_router.message(AddResult_2.photo_2)
+async def photo_2_validation(message: types.Message):
+    await message.answer("Отправьте скриншот забега, только одно изображение.")
+
+
+@user_router.message(AddResult_2.distance_2, or_f(F.text, F.text == "."))
+async def add_distance_2(message: types.Message, state: FSMContext):
+    try:
+        float(message.text)
+    except ValueError:
+        await message.answer("Пишите дистанцию через точку в километрах. "
+                             "Другие символы не используйте, пожалуйста."
+                             "\n(Например 21.1)")
+        return
+    await state.update_data(distance_2=float(message.text))
+    await message.answer("Отправьте скриншот сториз о пробежке второго дня."
+                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
+                         "в любых соц сетях или мессенджерах.")
+    await state.set_state(AddResult_2.story_2)
+
+
+@user_router.message(AddResult_2.distance_2)
+async def distance_2_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите дистанцию заново")
+
+
+@user_router.message(AddResult_2.story_2, or_f(F.photo))
+async def add_story_2(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.update_data(story_2=message.photo[-1].file_id)
+    await state.update_data(date_2=datetime.now())
+    telegram_id = int(message.from_user.id)
+    data = await state.get_data()
+    print(f'telegram_id = {telegram_id}, data = {data}')
+
+    try:
+        await update_user_2(session, telegram_id, data)
+        await message.answer("Второй день челленджа позади. Не сдавайтесь, и выходите на пробежку завтра. "
+                             "\nНапоминаем: поделитесь скидочным промокодом на "
+                             "марафон завтра в стори - бегите вместе с друзьями! ⚡️ "
+                             "\n*START*", reply_markup=DAY3_KB,
+                             parse_mode='Markdown'),
+        await message.answer("Нажмите команду /day_3 или кнопку, чтобы добавить третью пробежку",
+                             reply_markup=DAY3_KB)
+
+    except Exception as e:
+        await message.answer(
+            f"Данные не сохранены. Попробуйте снова.",
+            reply_markup=DAY2_KB,
+        )
+        await state.clear()
+    await state.clear()
+
+
+@user_router.message(AddResult_2.story_2)
+async def story_2_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, отправьте изображение заново")
+
+
+"""Запись третьего дня челленджа"""
+
+
+@user_router.message(StateFilter(None), or_f(Command("day_3"), F.text == "Добавить результаты третьего дня"))
+async def add_result_3(message: types.Message, state: FSMContext, session: AsyncSession):
+    telegram_id = message.from_user.id
+
+    is_user_exist = await get_user_unique(session, telegram_id)
+    if is_user_exist:
+        await message.answer(f"Отправьте скриншот пробежки третьего дня (загрузите только 1 изображение)")
+        await state.set_state(AddResult_3.photo_3)
+    else:
+        await message.answer("Вы еще не зарегистрировались. "
+                             "\nПопробуйте начать сначала",
+                             reply_markup=START_KB)
+
+
+@user_router.message(AddResult_3.photo_3, or_f(F.photo, F.text == "."))
+async def add_photo_3(message: types.Message, state: FSMContext):
+    await state.update_data(photo_3=message.photo[-1].file_id)
+    await message.answer("Какую дистанцию вы пробежали в километрах?"
+                         "\nУкажите только число через точку(например 21.1)")
+    await state.set_state(AddResult_3.distance_3)
+
+
+@user_router.message(AddResult_3.photo_3)
+async def photo_3_validation(message: types.Message):
+    await message.answer("Отправьте скриншот забега, только одно изображение.")
+
+
+@user_router.message(AddResult_3.distance_3, or_f(F.text, F.text == "."))
+async def add_distance_3(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        float(message.text)
+    except ValueError:
+        await message.answer("Пишите дистанцию через точку в километрах. "
+                             "Другие символы не используйте, пожалуйста."
+                             "\n(Например 21.1)")
+        return
+    await state.update_data(distance_3=float(message.text))
+    telegram_id = message.from_user.id
+    user = await get_user(session, telegram_id)
+    if user.distance_1 and user.distance_2:
+        result = user.distance_1 + user.distance_2 + float(message.text)
+        await state.update_data(result=result)
+        print(f'result={result}')
+    elif user.distance_1:
+        result = user.distance_1 + float(message.text)
+        await state.update_data(result=result)
+        print(f'result={result}')
+    elif user.distance_2:
+        result = user.distance_2 + float(message.text)
+        await state.update_data(result=result)
+        print(f'result={result}')
+    else:
+        await state.update_data(result=float(message.text))
+        print(f'result={float(message.text)}')
+    await message.answer("Отправьте скриншот сториз о пробежке третьего дня."
+                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
+                         "в любых соц сетях или мессенджерах.")
+    await state.set_state(AddResult_3.story_3)
+
+
+@user_router.message(AddResult_3.distance_3)
+async def distance_3_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите дистанцию заново")
+
+
+@user_router.message(AddResult_3.story_3, or_f(F.photo, F.text == "."))
+async def add_story_3(message: types.Message, state: FSMContext):
+    await state.update_data(story_3=message.photo[-1].file_id)
+    await message.answer("Ура, челлендж завершен!")
+    await message.answer(f"Готовы получить заслуженный приз? Необходимо заполнить данные для отправки открытки.\n"
+                         f"\nПожалуйста, проверьте правильность введенного индекса и адреса, это очень важно."
+                         f"\nЕсли вы допустили ошибку при вводе данных, напишите /cancel и начните сначала.")
+    await message.answer(f"Введите ваш почтовый индекс.")
+    await state.set_state(AddResult_3.index)
+
+    @user_router.message(AddResult_3.story_3)
+    async def story_3_validation(message: types.Message):
+        await message.answer("Вы ввели не допустимые данные, отправьте изображение заново")
+
+
+@user_router.message(AddResult_3.index, or_f(F.text, F.text == "."))
+async def add_index(message: types.Message, state: FSMContext):
+    try:
+        int(message.text)
+    except ValueError:
+        await message.answer("Введите индекс без дополнительных символов и пробелов")
+        return
+    await state.update_data(index=message.text)
+    await message.answer("Напишите ваш город")
+    await state.set_state(AddResult_3.city)
+
+
+@user_router.message(AddResult_3.index)
+async def index_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите индекс заново")
+
+
+@user_router.message(AddResult_3.city, or_f(F.text, F.text == "."))
 async def add_city(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(city=AddResult.product_for_change.city)
-    else:
-        await state.update_data(city=message.text)
-    sdek = {'Узнать пункт выдачи': 'https://www.cdek.ru/ru/offices/'}
-    await message.answer(f"Доставка возможна только до пункта выдачи СДЭК. \n"
-                         f"Узнать адрес выдачи можнно нпо ссылке: https://www.cdek.ru/ru/offices/\n"
-                         f"Укажите адрес удобного офиса СДЭК",
-                         reply_markup=get_url_btns(btns={'Узнать пункт выдачи': 'https://www.cdek.ru/ru/offices/'}))
-    await state.set_state(AddResult.address)
+    await state.update_data(city=message.text)
+    await message.answer("Напишите ваш адрес, и не забудьте указать номер квартиру. "
+                         "Иначе открытка вас не найдет 😊")
+    await state.set_state(AddResult_3.address)
 
 
-@user_router.message(AddResult.city)
-async def add_city2(message: types.Message, state: FSMContext):
+@user_router.message(AddResult_3.city)
+async def city_validation(message: types.Message):
     await message.answer("Вы ввели не допустимые данные, введите город заново")
 
 
-@user_router.message(AddResult.address, or_f(F.text, F.text == "."))
-async def add_address(message: types.Message, state: FSMContext):
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(address=AddResult.product_for_change.address)
-    else:
-        await state.update_data(address=message.text)
-    await message.answer(f"Укажите код пункта выдачи СДЭК")
-    await state.set_state(AddResult.code)
-
-
-@user_router.message(AddResult.address)
-async def add_address2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, ведите адрес удобного офиса СДЭК")
-
-
-@user_router.message(AddResult.code, or_f(F.text, F.text == "."))
-async def add_code(message: types.Message, state: FSMContext, session: AsyncSession):
-    user = message.from_user
-    if message.text == "." and AddResult.product_for_change:
-        await state.update_data(code=AddResult.product_for_change.code)
-    else:
-        await state.update_data(code=message.text)
-        await state.update_data(id_user=user.id)
+@user_router.message(AddResult_3.address, or_f(F.text, F.text == "."))
+async def add_address(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.update_data(address=message.text)
+    await state.update_data(date_3=datetime.now())
+    telegram_id = int(message.from_user.id)
     data = await state.get_data()
-    event = await orm_get_event(session, int(data['event']))
-    await message.answer(f"Пакеты будут отправлены после {event.data_finish.strftime("%d.%m")}. "
-                         f"Вам придет смс на указаный ранее номер телефона")
-    try:
+    print(f'telegram_id = {telegram_id}, data = {data}')
 
-        if AddResult.product_for_change:
-            await orm_update_online(session, AddResult.product_for_change.id, data)
-            await message.answer("Результат изменен", reply_markup=USER_KB)
-        else:
-            await orm_add_online(session, data)
-            await message.answer("Результат добавлен", reply_markup=USER_KB)
-            await message.answer(f'Посмотреть, изменить или удалить результат можно нажав \b"Мои результаты"\b'
-                                 f'\nНажмите \b"загрузить результат"\b, если хотите загрузить результат за другого участника',
-                                 reply_markup=USER_KB)
-        await state.clear()
+    try:
+        await update_user_3(session, telegram_id, data)
+        await message.answer("Поздравляем с завершением челленджа и до встречи на марафоне! 🌴"
+                             "\nПриезжайте с друзьями - делитесь в соц сетях промокодом на скидку *START️*",
+                             parse_mode='Markdown')
+        await message.answer("Сомневаетесь в правильности введеных результатов? "
+                             "Вы можете проверить его по команде /result",
+                             reply_markup=CHECK_KB)
 
 
     except Exception as e:
         await message.answer(
-            f"Ошибка: \n{str(e)}\n. Попробуйте снова.",
-            reply_markup=USER_KB,
+            f"Данные не сохранены. Попробуйте снова.",
+            reply_markup=DAY3_KB,
         )
         await state.clear()
     await state.clear()
-    AddResult.product_for_change = None
 
 
-@user_router.message(AddResult.code)
-async def add_code2(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, введите код выдачи СДЭК")
+@user_router.message(AddResult_3.address)
+async def address_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите адрес заново")
+
+
+"""Вывод результатов"""
+
+
+@user_router.message(StateFilter(None), or_f(Command("result"), F.text == "Показать мой результат"))
+async def get_result_(message: types.Message, session: AsyncSession):
+    telegram_id = message.from_user.id
+    user = await get_user(session, telegram_id)
+    is_user_exist = await get_user_unique(session, telegram_id)
+    if is_user_exist:
+        if user.distance_1:
+            await message.answer(f"Дистанция первого дня: {user.distance_1}")
+        else:
+            await message.answer(f"Не видим дистанцию первого дня. Загрузите трек еще раз /day_1 ")
+        if user.distance_2:
+            await message.answer(f"Дистанция второго дня: {user.distance_2}")
+        else:
+            await message.answer(f"Не видим дистанцию второго дня. Загрузите трек еще раз /day_2 ")
+        if user.distance_3:
+            await message.answer(f"Дистанция третьего дня: {user.distance_3}")
+        else:
+            await message.answer(f"Не видим дистанцию трерьего дня. Загрузите трек еще раз /day_3 ")
+    else:
+        await message.answer("Вы еще не зарегистрировались. "
+                             "\nПопробуйте начать сначала",
+                             reply_markup=START_KB)
+
+# """код отмены"""
+#
+#
+# @user_router.message(StateFilter('*'), or_f(Command("cancel"), F.text.lower() == "отмена"))
+# async def cancel_handler(message: types.Message, state: FSMContext) -> None:
+#     await state.clear()
+#     await message.answer("Действия отменены", reply_markup=ALL_KB)
+#
+#
+# dp.message.register(cancel_handler, Command("cancel"), StateFilter('*'))
