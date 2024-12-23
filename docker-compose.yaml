@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    volumes:
+      - .:/app  # Монтируем текущую директорию в контейнер
+    ports:
+      - "8000:8000"  # Порт, на котором будет доступно приложение
+
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password_topliga@db:5432/db_challenge
+    depends_on:
+      - db
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    env_file:
+      - .env
+
+  db:
+    image: postgres:13
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: db_challenge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password_topliga
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
