@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from handlers.chat_types import ChatTypeFilter, IsAdmin
-from database.orm_query import get_user, get_user_login, get_user_id, get_users_all
+from database.orm_query import get_user_results, get_user_login, get_user_id, get_users_all
 from handlers.keyboards import get_keyboard
 
 
@@ -89,7 +89,7 @@ async def check_photo(message: types.Message, state: FSMContext):
 @admin_router.message(CheckPhoto_telegram_id.telegram_id)
 async def get_photo(message: types.Message, state: FSMContext, session: AsyncSession):
     telegram_id = int(message.text)
-    user = await get_user(session, telegram_id)
+    user = await get_user_results(session, telegram_id)
     await message.answer(f"Участник {user.name} "
                          f"\nЛогин @{user.telegram_login}"
                          f"\nОбщая дистанция {user.result}")

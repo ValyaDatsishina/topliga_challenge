@@ -1,8 +1,7 @@
-from sqlalchemy import String, DateTime, func, ARRAY, Date, BigInteger, Integer, Float
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
+from sqlalchemy import String, DateTime, func, ARRAY, Date, BigInteger, Integer, Float, ForeignKey
+from sqlalchemy.orm import declarative_base, Mapped, mapped_column, relationship
 
 Base = declarative_base()
-
 
 
 class User(Base):
@@ -13,6 +12,18 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(400), nullable=False)
     phone: Mapped[str] = mapped_column(String(11), nullable=False)
     email: Mapped[str] = mapped_column(String(500), nullable=True)
+    index: Mapped[str] = mapped_column(String(10), nullable=True)
+    city: Mapped[str] = mapped_column(String(150), nullable=True)
+    address: Mapped[str] = mapped_column(String(400), nullable=True)
+    date_reg: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
+
+    results = relationship("Result", back_populates="user")
+
+
+class Result(Base):
+    __tablename__ = 'result'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), nullable=False)
     distance_1: Mapped[int] = mapped_column(Float, nullable=True)
     photo_1: Mapped[str] = mapped_column(String(150), nullable=True)
     story_1: Mapped[str] = mapped_column(String(150), nullable=True)
@@ -25,14 +36,13 @@ class User(Base):
     photo_3: Mapped[str] = mapped_column(String(150), nullable=True)
     story_3: Mapped[str] = mapped_column(String(150), nullable=True)
     date_3: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
-    index: Mapped[str] = mapped_column(String(10), nullable=True)
-    city: Mapped[str] = mapped_column(String(150), nullable=True)
-    address: Mapped[str] = mapped_column(String(400), nullable=True)
     result: Mapped[int] = mapped_column(Float, nullable=True)
+
+    # Связь с таблицей User
+    user = relationship("User", back_populates="results")
 
 
 class Telegram_ID(Base):
     __tablename__ = 'telegram_id'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-

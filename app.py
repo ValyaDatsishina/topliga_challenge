@@ -1,19 +1,20 @@
 import asyncio
 from aiogram import Bot, Dispatcher
+import logging
 
-# # from aiogram.utils import executor
 
 import os
 from dotenv import load_dotenv, find_dotenv, dotenv_values
 
-# from dependencies import Dependencies
-
 from middlewares.db import DataBaseSession
 from database.engine import create_db, drop_db, session_maker
 
-# from routers import admin_router, user_router
 from handlers.user_private import user_router
 from handlers.admin_private import admin_router
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)  # Установите уровень логирования для вашего приложения
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)  # Отключаем логи SQLAlchemy
 
 
 load_dotenv(find_dotenv())
@@ -25,10 +26,6 @@ api_token = config['TELEGRAM_API_TOKEN']
 
 bot = Bot(token=api_token)
 dp = Dispatcher(bot=bot)
-
-
-# bot = Dependencies.bot(token=api_token)
-# dp = Dependencies.dispatcher(bot=bot)
 
 bot.my_admins_list = []
 for i in range(0, 5):
@@ -52,10 +49,7 @@ async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    # admin_router.message(MyForm.message)(handle_message_for_broadcast, bot=bot)
-    # await dp.wait_idle()
 
 
-asyncio.run(main())
-
-
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,14 +1,21 @@
+import os
+import tempfile
 from datetime import datetime
+from io import BytesIO
+from PIL import Image
 
 from aiogram import F, Router, types
 from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InputFile
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from handlers.chat_types import ChatTypeFilter
-from database.orm_query import add_user, update_user_1, update_user_2, update_user_3, get_user, \
-    get_user_unique
+from database.orm_query import (add_user, add_result_for_user, update_result2_for_user, update_result3_for_user, \
+                                get_user_results, get_user_unique, get_total_distance)
+from handlers.frame_engine import add_frame
 from handlers.keyboards import get_keyboard
 
 user_router = Router()
@@ -48,6 +55,9 @@ class AddUser(StatesGroup):
     name = State()
     phone = State()
     email = State()
+    index = State()
+    city = State()
+    address = State()
 
     texts = {
         'AddUser:name': 'Введите имя заново:',
@@ -58,6 +68,7 @@ class AddUser(StatesGroup):
 class AddResult_1(StatesGroup):
     distance_1 = State()
     photo_1 = State()
+    frame_1 = State()
     story_1 = State()
     date_1 = State()
 
@@ -84,9 +95,6 @@ class AddResult_3(StatesGroup):
     photo_3 = State()
     story_3 = State()
     date_3 = State()
-    index = State()
-    city = State()
-    address = State()
     result = State()
 
     field_for_change = None
@@ -116,7 +124,7 @@ async def user_start(message: types.Message, state: FSMContext, session: AsyncSe
     telegram_id = message.from_user.id
     is_user_exist = await get_user_unique(session, telegram_id)
     if is_user_exist:
-        user = await get_user(session, telegram_id)
+        user = await get_user_results(session, telegram_id)
         await message.answer(f'Вы уже зарегистрированы!')
         if not user.distance_1:
             await message.answer(f'Но вы не добавили результаты первого дня челленджа.', reply_markup=DAY1_KB)
@@ -133,18 +141,18 @@ async def user_start(message: types.Message, state: FSMContext, session: AsyncSe
                                  f"\nОтличный результат, так держать!")
 
     else:
-        await message.answer(f'Мы рады видеть вас на заключительном челлендже ANTA Сочи Марафон!\n'
-                             f'\nНапоминаем условия челленджа:'
-                             f'\n1. Выходить на пробежку каждый день с 11 по 13 октября;'
+        await message.answer(f'Привет от марафонского бота 👋 Завершающий забег этого сезона уже совсем близко, '
+                             f'готовимся вместе!\n'
+                             f'\nУсловия челленджа:'
+                             f'\n1. Выходить на пробежку каждый день с 25 по 27 октября;'
                              f'\n2. Присылать трек пробежки в тот же день в этот чат-бот;'
-                             f'\n3. Подписаться на [страницу VK спортивного бренда ANTA](https://vk.com/anta_official);'
-                             f'\n4. Выкладывать сториз о пробежках в любых соц сетях или мессенджерах с текстом: '
-                             f'*готовлюсь к ANTA Сочи Марафону*🌴', parse_mode='Markdown')
+                             f'\n3. Выкладывать сториз о пробежках в любых соц сетях или мессенджерах с текстом: '
+                             f'*Самые спортивные сотрудники «Магнита»*', parse_mode='Markdown')
         await message.answer(
             f'Если вы допустили ошибку при вводе данных, нажмите /cancel и начните сначала.\n'
             f'\nВ меню, рядом со строчкой ввода текста, вы можете увидеть все доступные команды, '
             f'но просим вас добавлять записи тренировок по порядку, чтобы итоговый результат посчитался верно.')
-        await message.answer(f'Для участия нужно зарегистрироваться. \nВведите ваше Имя')
+        await message.answer(f'Для участия нужно зарегистрироваться. \nВведите Имя')
         await state.set_state(AddUser.name)
 
 
@@ -194,20 +202,66 @@ async def phone_validation(message: types.Message, state: FSMContext):
 
 
 @user_router.message(AddUser.email, or_f(F.text, F.text == "."))
-async def add_email(message: types.Message, state: FSMContext, session: AsyncSession):
+async def add_email(message: types.Message, state: FSMContext):
     await state.update_data(email=message.text)
+    await message.answer(
+        f"Чтобы получить заслуженный приз, необходимо заполнить данные для отправки юбилейного подарка.\n"
+        f"\nПожалуйста, проверьте правильность введенного индекса и адреса, это очень важно."
+        f"\nЕсли вы допустили ошибку при вводе данных, напишите /cancel и начните сначала.")
+    await message.answer(f"Введите ваш почтовый индекс.")
+    await state.set_state(AddUser.index)
+
+
+@user_router.message(AddUser.email)
+async def email_validation(message: types.Message, state: FSMContext):
+    await message.answer("Вы ввели не допустимые данные, введите почту заново")
+
+
+@user_router.message(AddUser.index, or_f(F.text, F.text == "."))
+async def add_index(message: types.Message, state: FSMContext):
+    try:
+        int(message.text)
+    except ValueError:
+        await message.answer("Введите индекс без дополнительных символов и пробелов")
+        return
+    await state.update_data(index=message.text)
+    await message.answer("Напишите ваш город")
+    await state.set_state(AddUser.city)
+
+
+@user_router.message(AddUser.index)
+async def index_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите индекс заново")
+
+
+@user_router.message(AddUser.city, or_f(F.text, F.text == "."))
+async def add_city(message: types.Message, state: FSMContext):
+    await state.update_data(city=message.text)
+    await message.answer("Напишите ваш адрес, и не забудьте указать номер квартиру. "
+                         "Иначе подарок вас не найдет 😊")
+    await state.set_state(AddUser.address)
+
+
+@user_router.message(AddUser.city)
+async def city_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, введите город заново")
+
+
+@user_router.message(AddUser.address, or_f(F.text, F.text == "."))
+async def add_address(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.update_data(address=message.text)
+    await state.update_data(date_reg=datetime.now())
+    telegram_id = int(message.from_user.id)
     data = await state.get_data()
+    print(f'telegram_id = {telegram_id}, data = {data}')
     try:
         await add_user(session, data)
         await message.answer("Отлично, вы зарегистированы!"
                              "\nВперед на пробежку! "
-                             "Не забудьте записать трек тренировки, а также сделать сториз с текстом: "
-                             "*готовлюсь к ANTA Сочи Марафону*"
-                             "\nЕсли вы выкладываете историю в Instagram, отмечайте @topligarun.",
+                             "Не забудьте записать трек тренировки, а также сделать сториз",
                              reply_markup=DAY1_KB, parse_mode='Markdown')
 
-        await message.answer("Нажмите команду /day_1 или кнопку, чтобы добавить первую пробежку",
-                             reply_markup=DAY1_KB)
+        await message.answer("Нажмите команду /day_1 или кнопку, чтобы добавить первую пробежку", reply_markup=DAY1_KB)
 
     except Exception as e:
         await message.answer(
@@ -221,11 +275,6 @@ async def add_email(message: types.Message, state: FSMContext, session: AsyncSes
     await state.clear()
 
 
-@user_router.message(AddUser.email)
-async def email_validation(message: types.Message, state: FSMContext):
-    await message.answer("Вы ввели не допустимые данные, введите почту заново")
-
-
 """Запись первого дня челленджа"""
 
 
@@ -234,7 +283,8 @@ async def add_result_1(message: types.Message, state: FSMContext, session: Async
     telegram_id = message.from_user.id
     is_user_exist = await get_user_unique(session, telegram_id)
     if is_user_exist:
-        await message.answer(f"Отправьте скриншот пробежки первого дня (загрузите только 1 изображение)")
+        await message.answer(f"Отправьте скриншот любого бегового приложения или трекера, "
+                             f"где видно дистанцию первого дня (загрузите только 1 изображение)")
         await state.set_state(AddResult_1.photo_1)
     else:
         await message.answer("Вы еще не зарегистрировались. "
@@ -265,10 +315,9 @@ async def add_distance_1(message: types.Message, state: FSMContext):
                              "\n(Например 21.1)")
         return
     await state.update_data(distance_1=float(message.text))
-    await message.answer("Отправьте скриншот сториз о пробежке первого дня."
-                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
-                         "в любых соц сетях или мессенджерах.")
-    await state.set_state(AddResult_1.story_1)
+    await message.answer("Отправьте фото, чтобы мы добавили рамку."
+                         "\nФото в рамке вы можете выложить в любых соц сетях или мессенджерах.")
+    await state.set_state(AddResult_1.frame_1)
 
 
 @user_router.message(AddResult_1.distance_1)
@@ -276,20 +325,54 @@ async def distance_1_validation(message: types.Message):
     await message.answer("Вы ввели не допустимые данные, введите дистанцию заново")
 
 
+@user_router.message(AddResult_1.frame_1, or_f(F.photo))
+async def add_frame_1(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        photo = message.photo[-1]  # Получаем наибольшую версию фото
+        file_id = photo.file_id  # Получаем file_id для загрузки
+
+        # Получаем файл с помощью bot.get_file()
+        file = await message.bot.get_file(file_id)
+
+        # Скачиваем файл
+        photo_file = await message.bot.download_file(file.file_path)
+
+        # Читаем содержимое файла в BytesIO
+        photo_bytes = BytesIO()
+        photo_bytes.write(photo_file.read())  # Читаем данные в BytesIO
+        photo_bytes.seek(0)  # Сбрасываем указатель на начало
+
+        # Открываем изображение с помощью Pillow
+        image = Image.open(photo_bytes).convert("RGBA")
+
+        # Получаем обработанное изображение в BytesIO
+        framed_image_bytes = add_frame(image)
+
+        # Создаем InputFile из BytesIO
+        input_file = InputFile(framed_image_bytes)
+
+        # Отправляем обработанное изображение обратно пользователю
+        await message.answer_photo(input_file, caption="Выложи фото с рамкой в сториз и пришли скрин")
+
+    except Exception as e:
+        print(f"Ошибка при обработке изображения: {e}")
+        await message.answer("Произошла ошибка при обработке изображения. Пожалуйста, попробуйте снова.")
+
+    await state.set_state(AddResult_1.story_1)
+
+
 @user_router.message(AddResult_1.story_1, or_f(F.photo))
 async def add_story_1(message: types.Message, state: FSMContext, session: AsyncSession):
     await state.update_data(story_1=message.photo[-1].file_id)
+
     await state.update_data(date_1=datetime.now())
     telegram_id = int(message.from_user.id)
     data = await state.get_data()
     print(f'telegram_id = {telegram_id}, data = {data}')
 
     try:
-        await update_user_1(session, telegram_id, data)
-        await message.answer("Первый день есть! \nДарим вам промокод на скидку для ваших друзей - "
-                             "приезжайте на старт командой ⚡️ "
-                             "Выкладывайте его в стори с фото пробежки завтра.\n *START*", reply_markup=DAY2_KB,
-                             parse_mode='Markdown')
+        await add_result_for_user(session, telegram_id, data)
+        await message.answer("Первый день есть!\nЖдем вас завтра.", reply_markup=DAY2_KB, parse_mode='Markdown')
         await message.answer("Нажмите команду /day_2 или кнопку, чтобы добавить вторую пробежку",
                              reply_markup=DAY2_KB)
 
@@ -297,9 +380,7 @@ async def add_story_1(message: types.Message, state: FSMContext, session: AsyncS
         await message.answer(
             f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
             f"по нему потом будет составляться турнирная таблица."
-            f"\nДобавьте имя пользователя в профиле и попробуйте снова.",
-            reply_markup=DAY1_KB,
-        )
+            f"\nДобавьте имя пользователя в профиле и попробуйте снова.", reply_markup=DAY1_KB)
         await state.clear()
     await state.clear()
 
@@ -318,7 +399,8 @@ async def add_result_2(message: types.Message, state: FSMContext, session: Async
 
     is_user_exist = await get_user_unique(session, telegram_id)
     if is_user_exist:
-        await message.answer(f"Отправьте скриншот пробежки второго дня (загрузите только 1 изображение)")
+        await message.answer(f"Отправьте скриншот любого бегового приложения или трекера, "
+                             "где видно дистанцию второго дня (загрузите только 1 изображение)")
         await state.set_state(AddResult_2.photo_2)
     else:
         await message.answer("Вы еще не зарегистрировались. "
@@ -350,8 +432,7 @@ async def add_distance_2(message: types.Message, state: FSMContext):
         return
     await state.update_data(distance_2=float(message.text))
     await message.answer("Отправьте скриншот сториз о пробежке второго дня."
-                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
-                         "в любых соц сетях или мессенджерах.")
+                         "\nВы можете выложить сториз о пробежках в любых соц сетях или мессенджерах.")
     await state.set_state(AddResult_2.story_2)
 
 
@@ -369,12 +450,9 @@ async def add_story_2(message: types.Message, state: FSMContext, session: AsyncS
     print(f'telegram_id = {telegram_id}, data = {data}')
 
     try:
-        await update_user_2(session, telegram_id, data)
-        await message.answer("Второй день челленджа позади. Не сдавайтесь, и выходите на пробежку завтра. "
-                             "\nНапоминаем: поделитесь скидочным промокодом на "
-                             "марафон завтра в стори - бегите вместе с друзьями! ⚡️ "
-                             "\n*START*", reply_markup=DAY3_KB,
-                             parse_mode='Markdown'),
+        await update_result2_for_user(session, telegram_id, data)
+        await message.answer("Второй день челленджа позади. Не сдавайтесь, и выходите на пробежку завтра. ",
+                             reply_markup=DAY3_KB, parse_mode='Markdown'),
         await message.answer("Нажмите команду /day_3 или кнопку, чтобы добавить третью пробежку",
                              reply_markup=DAY3_KB)
 
@@ -401,7 +479,8 @@ async def add_result_3(message: types.Message, state: FSMContext, session: Async
 
     is_user_exist = await get_user_unique(session, telegram_id)
     if is_user_exist:
-        await message.answer(f"Отправьте скриншот пробежки третьего дня (загрузите только 1 изображение)")
+        await message.answer(f"Отправьте скриншот любого бегового приложения или трекера, "
+                             f"где видно дистанцию третьего дня (загрузите только 1 изображение)")
         await state.set_state(AddResult_3.photo_3)
     else:
         await message.answer("Вы еще не зарегистрировались. "
@@ -433,25 +512,11 @@ async def add_distance_3(message: types.Message, state: FSMContext, session: Asy
         return
     await state.update_data(distance_3=float(message.text))
     telegram_id = message.from_user.id
-    user = await get_user(session, telegram_id)
-    if user.distance_1 and user.distance_2:
-        result = user.distance_1 + user.distance_2 + float(message.text)
-        await state.update_data(result=result)
-        print(f'result={result}')
-    elif user.distance_1:
-        result = user.distance_1 + float(message.text)
-        await state.update_data(result=result)
-        print(f'result={result}')
-    elif user.distance_2:
-        result = user.distance_2 + float(message.text)
-        await state.update_data(result=result)
-        print(f'result={result}')
-    else:
-        await state.update_data(result=float(message.text))
-        print(f'result={float(message.text)}')
+    total = await get_total_distance(session, telegram_id)
+    result = total + float(message.text)
+    await state.update_data(result=result)
     await message.answer("Отправьте скриншот сториз о пробежке третьего дня."
-                         "\nВы можете выложить сториз о подготовке к ANTA Сочи Марафону "
-                         "в любых соц сетях или мессенджерах.")
+                         "\nВы можете выложить сториз о пробежках в любых соц сетях или мессенджерах.")
     await state.set_state(AddResult_3.story_3)
 
 
@@ -461,67 +526,19 @@ async def distance_3_validation(message: types.Message):
 
 
 @user_router.message(AddResult_3.story_3, or_f(F.photo, F.text == "."))
-async def add_story_3(message: types.Message, state: FSMContext):
+async def add_story_3(message: types.Message, state: FSMContext, session: AsyncSession):
     await state.update_data(story_3=message.photo[-1].file_id)
-    await message.answer("Ура, челлендж завершен!")
-    await message.answer(f"Готовы получить заслуженный приз? Необходимо заполнить данные для отправки открытки.\n"
-                         f"\nПожалуйста, проверьте правильность введенного индекса и адреса, это очень важно."
-                         f"\nЕсли вы допустили ошибку при вводе данных, напишите /cancel и начните сначала.")
-    await message.answer(f"Введите ваш почтовый индекс.")
-    await state.set_state(AddResult_3.index)
-
-    @user_router.message(AddResult_3.story_3)
-    async def story_3_validation(message: types.Message):
-        await message.answer("Вы ввели не допустимые данные, отправьте изображение заново")
-
-
-@user_router.message(AddResult_3.index, or_f(F.text, F.text == "."))
-async def add_index(message: types.Message, state: FSMContext):
-    try:
-        int(message.text)
-    except ValueError:
-        await message.answer("Введите индекс без дополнительных символов и пробелов")
-        return
-    await state.update_data(index=message.text)
-    await message.answer("Напишите ваш город")
-    await state.set_state(AddResult_3.city)
-
-
-@user_router.message(AddResult_3.index)
-async def index_validation(message: types.Message):
-    await message.answer("Вы ввели не допустимые данные, введите индекс заново")
-
-
-@user_router.message(AddResult_3.city, or_f(F.text, F.text == "."))
-async def add_city(message: types.Message, state: FSMContext):
-    await state.update_data(city=message.text)
-    await message.answer("Напишите ваш адрес, и не забудьте указать номер квартиру. "
-                         "Иначе открытка вас не найдет 😊")
-    await state.set_state(AddResult_3.address)
-
-
-@user_router.message(AddResult_3.city)
-async def city_validation(message: types.Message):
-    await message.answer("Вы ввели не допустимые данные, введите город заново")
-
-
-@user_router.message(AddResult_3.address, or_f(F.text, F.text == "."))
-async def add_address(message: types.Message, state: FSMContext, session: AsyncSession):
-    await state.update_data(address=message.text)
     await state.update_data(date_3=datetime.now())
     telegram_id = int(message.from_user.id)
     data = await state.get_data()
     print(f'telegram_id = {telegram_id}, data = {data}')
-
     try:
-        await update_user_3(session, telegram_id, data)
-        await message.answer("Поздравляем с завершением челленджа и до встречи на марафоне! 🌴"
-                             "\nПриезжайте с друзьями - делитесь в соц сетях промокодом на скидку *START️*",
+        await update_result3_for_user(session, telegram_id, data)
+        await message.answer("Поздравляем с завершением челленджа и до встречи на марафоне! 🌴",
                              parse_mode='Markdown')
         await message.answer("Сомневаетесь в правильности введеных результатов? "
                              "Вы можете проверить его по команде /result",
                              reply_markup=CHECK_KB)
-
 
     except Exception as e:
         await message.answer(
@@ -532,9 +549,9 @@ async def add_address(message: types.Message, state: FSMContext, session: AsyncS
     await state.clear()
 
 
-@user_router.message(AddResult_3.address)
-async def address_validation(message: types.Message):
-    await message.answer("Вы ввели не допустимые данные, введите адрес заново")
+@user_router.message(AddResult_3.story_3)
+async def story_3_validation(message: types.Message):
+    await message.answer("Вы ввели не допустимые данные, отправьте изображение заново")
 
 
 """Вывод результатов"""
@@ -543,19 +560,19 @@ async def address_validation(message: types.Message):
 @user_router.message(StateFilter(None), or_f(Command("result"), F.text == "Показать мой результат"))
 async def get_result_(message: types.Message, session: AsyncSession):
     telegram_id = message.from_user.id
-    user = await get_user(session, telegram_id)
+    distance = await get_user_results(session, telegram_id)
     is_user_exist = await get_user_unique(session, telegram_id)
     if is_user_exist:
-        if user.distance_1:
-            await message.answer(f"Дистанция первого дня: {user.distance_1}")
+        if distance[0] != 0:
+            await message.answer(f"Дистанция первого дня: {distance[0]}")
         else:
             await message.answer(f"Не видим дистанцию первого дня. Загрузите трек еще раз /day_1 ")
-        if user.distance_2:
-            await message.answer(f"Дистанция второго дня: {user.distance_2}")
+        if distance[1] != 0:
+            await message.answer(f"Дистанция второго дня: {distance[1]}")
         else:
             await message.answer(f"Не видим дистанцию второго дня. Загрузите трек еще раз /day_2 ")
-        if user.distance_3:
-            await message.answer(f"Дистанция третьего дня: {user.distance_3}")
+        if distance[2] != 0:
+            await message.answer(f"Дистанция третьего дня: {distance[2]}")
         else:
             await message.answer(f"Не видим дистанцию трерьего дня. Загрузите трек еще раз /day_3 ")
     else:
