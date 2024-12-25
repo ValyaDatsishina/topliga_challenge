@@ -3,7 +3,7 @@ from sqlalchemy import update, delete, func
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from database.models import User, Result, Telegram_ID
+from database.models import User, Result, Telegram_ID, Promo
 
 """Добавление в бд нового участника"""
 
@@ -48,6 +48,24 @@ async def get_user_unique(session: AsyncSession, telegram_id: int):
         return True
 
 
+"""Проверка на наличие записи в result"""
+
+
+async def get_result_unique(session: AsyncSession, telegram_id: int):
+    result = await session.execute(
+        select(func.count(Result.user_id))
+        .where(User.telegram_id == telegram_id)
+        .join(User, Result.user_id == User.id)
+    )
+    # result = await session.execute(query)
+    user_count = result.scalars().all()
+    print(f'user_count={user_count[0]}')
+    if user_count[0] == 0:
+        return False
+    else:
+        return True
+
+
 """Выгрузка информации про участника по Telegram ID"""
 
 
@@ -74,6 +92,30 @@ async def get_user_results(session: AsyncSession, telegram_id: int):
     return distance_1, distance_2, distance_3
 
 
+"""Проверка, что участник бежал все дни"""
+
+
+async def check_distances_filled(session: AsyncSession, telegram_id: int) -> bool:
+    result = await session.execute(
+        select(Result)
+        .where(User.telegram_id == telegram_id)
+        .join(User, Result.user_id == User.id)
+    )
+    user = result.scalars().first()
+
+    if not user:
+        return False
+
+    results = user.result
+    if not results:
+        return False
+
+    if user.distance_1 is None or user.distance_2 is None or user.distance_3 is None:
+        return False
+
+    return True
+
+
 """Подсчет результата всех дней"""
 
 
@@ -88,6 +130,35 @@ async def get_total_distance(session: AsyncSession, telegram_id: int) -> float:
 
     total_distance = result.scalar_one_or_none()
     return total_distance or 0.0
+
+
+"""Выдача промо-кода"""
+
+
+async def get_promo_code(session: AsyncSession, telegram_id: int) -> str:
+    # Получаем результат по ID
+    user_query = await session.execute(select(User).filter(User.telegram_id == telegram_id))
+    user = user_query.scalars().first()
+
+    if not user:
+        return "User  not found"
+
+    user_id = user.id  # Получаем user_id
+
+    # Получаем результаты по user_id
+    result_query = await session.execute(select(Result).filter(Result.user_id == user_id))
+    result = result_query.scalars().first()
+
+    if not result:
+        return "Result not found"
+
+    promo_query = await session.execute(select(Promo).filter(Promo.id == result.id))  # Замените условие, если нужно
+    promo = promo_query.scalars().first()
+
+    if not promo:
+        return "Promo code not found"
+
+    return promo.Code
 
 
 """Выгрузка информации про участника по login"""
@@ -134,7 +205,7 @@ async def update_user(session: AsyncSession, telegram_id: int, data):
     await session.commit()
 
 
-"""Изменение результатов участника за 1ый день"""
+"""Добавление записи результатов участника за 1ый день"""
 
 
 async def add_result_for_user(session: AsyncSession, telegram_id: int, data):
@@ -157,6 +228,36 @@ async def add_result_for_user(session: AsyncSession, telegram_id: int, data):
 
     session.add(new_result)
     await session.commit()
+
+
+"""Изменение результатов участника за 1ый день"""
+
+
+async def update_result1_for_user(session: AsyncSession, telegram_id: int, data):
+    user_query = select(User).where(User.telegram_id == telegram_id)
+    result = await session.execute(user_query)
+    user = result.scalars().first()
+
+    if user is None:
+        raise ValueError(f"User  with telegram_id {telegram_id} not found.")
+
+    result_query = select(Result).where(Result.user_id == user.id)
+    result_record = await session.execute(result_query)
+    existing_result = result_record.scalars().first()
+
+    if existing_result is None:
+        raise ValueError(f"No result found for user with telegram_id {telegram_id}.")
+
+    # Обновить поля записи
+    existing_result.distance_1 = data.get('distance_1', existing_result.distance_1)
+    existing_result.photo_1 = data.get('photo_1', existing_result.photo_1)
+    existing_result.story_1 = data.get('story_1', existing_result.story_1)
+    existing_result.date_1 = data.get('date_1', existing_result.date_1)
+
+    # Сохранить изменения
+    await session.commit()
+
+    return existing_result  # Возвращаем обновленную запись
 
 
 """Изменение результатов участника за 2ый день"""

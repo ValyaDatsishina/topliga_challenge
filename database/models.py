@@ -23,7 +23,7 @@ class User(Base):
 class Result(Base):
     __tablename__ = 'result'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), nullable=False, unique=True)
     distance_1: Mapped[int] = mapped_column(Float, nullable=True)
     photo_1: Mapped[str] = mapped_column(String(150), nullable=True)
     story_1: Mapped[str] = mapped_column(String(150), nullable=True)
@@ -40,6 +40,12 @@ class Result(Base):
 
     # Связь с таблицей User
     user = relationship("User", back_populates="results")
+
+
+class Promo(Base):
+    __tablename__ = 'promo'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    Code: Mapped[str] = mapped_column(String(6), unique=True)
 
 
 class Telegram_ID(Base):

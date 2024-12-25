@@ -14,7 +14,8 @@ from handlers.admin_private import admin_router
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)  # Установите уровень логирования для вашего приложения
-logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)  # Отключаем логи SQLAlchemy
+logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)  # Отключаем логи SQLAlchemy
+logging.getLogger('aiogram').setLevel(logging.ERROR)  # Отключаем логи SQLAlchemy
 
 
 load_dotenv(find_dotenv())

@@ -51,11 +51,5 @@ def add_frame(photo):
     output = BytesIO()
     image.save(output, format='PNG')
     output.seek(0)  # Сбрасываем указатель на начало
-    print(type(output))
 
     return output
-    # image = Image.alpha_composite(image, frame)
-    # tmp_file = 'image/framed_image.png'
-    # image.save(tmp_file)
-    #
-    # return tmp_file

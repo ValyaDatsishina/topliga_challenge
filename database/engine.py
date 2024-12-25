@@ -7,7 +7,7 @@ from database.models import Base
 DATABASE_URL = 'postgresql+asyncpg://postgres:password_topliga@db:5432/db_challenge'
 connection = pg.connect(DATABASE_URL)
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)
 
 session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
