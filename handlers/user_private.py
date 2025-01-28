@@ -1,3 +1,5 @@
+import io
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -14,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from handlers.chat_types import ChatTypeFilter
 from database.orm_query import (add_user, add_result_for_user, update_result2_for_user, update_result3_for_user, \
-                                get_user_results, get_user_unique, get_total_distance)
+                                get_user_results, get_user_unique, get_total_distance, check_distances_filled,
+                                get_promo_code, get_result_unique)
 from handlers.frame_engine import add_frame
 from handlers.keyboards import get_keyboard
 
@@ -38,6 +41,7 @@ DAY3_KB = get_keyboard("Добавить результаты третьего �
                        )
 
 CHECK_KB = get_keyboard("Показать мой результат",
+                        "Получить промо-код",
                         placeholder="Выберите действие", )
 
 ALL_KB = get_keyboard("Зарегистрироваться",
@@ -326,7 +330,7 @@ async def distance_1_validation(message: types.Message):
 
 
 @user_router.message(AddResult_1.frame_1, or_f(F.photo))
-async def add_frame_1(message: types.Message, state: FSMContext, session: AsyncSession):
+async def add_frame_1(message: types.Message, state: FSMContext):
     try:
         photo = message.photo[-1]  # Получаем наибольшую версию фото
         file_id = photo.file_id  # Получаем file_id для загрузки
@@ -341,18 +345,20 @@ async def add_frame_1(message: types.Message, state: FSMContext, session: AsyncS
         photo_bytes = BytesIO()
         photo_bytes.write(photo_file.read())  # Читаем данные в BytesIO
         photo_bytes.seek(0)  # Сбрасываем указатель на начало
-
         # Открываем изображение с помощью Pillow
         image = Image.open(photo_bytes).convert("RGBA")
-
-        # Получаем обработанное изображение в BytesIO
         framed_image_bytes = add_frame(image)
-
+        # await message.answer(f'framed_image_bytes = {framed_image_bytes}')
         # Создаем InputFile из BytesIO
-        input_file = InputFile(framed_image_bytes)
+        framed_image_bytes.seek(0)
+        input_file = InputFile(framed_image_bytes, filename='framed_image.png')
+
+        # Передаем путь к файлу
+        await message.answer(f'input_file = {input_file}')
 
         # Отправляем обработанное изображение обратно пользователю
         await message.answer_photo(input_file, caption="Выложи фото с рамкой в сториз и пришли скрин")
+
 
     except Exception as e:
         print(f"Ошибка при обработке изображения: {e}")
@@ -369,20 +375,35 @@ async def add_story_1(message: types.Message, state: FSMContext, session: AsyncS
     telegram_id = int(message.from_user.id)
     data = await state.get_data()
     print(f'telegram_id = {telegram_id}, data = {data}')
+    is_result_exist = await get_result_unique(session, telegram_id)
+    if is_result_exist:
+        try:
+            await add_result_for_user(session, telegram_id, data)
+            await message.answer("Первый день есть!\nЖдем вас завтра.", reply_markup=DAY2_KB, parse_mode='Markdown')
+            await message.answer("Нажмите команду /day_2 или кнопку, чтобы добавить вторую пробежку",
+                                 reply_markup=DAY2_KB)
 
-    try:
-        await add_result_for_user(session, telegram_id, data)
-        await message.answer("Первый день есть!\nЖдем вас завтра.", reply_markup=DAY2_KB, parse_mode='Markdown')
-        await message.answer("Нажмите команду /day_2 или кнопку, чтобы добавить вторую пробежку",
-                             reply_markup=DAY2_KB)
-
-    except Exception as e:
-        await message.answer(
-            f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
-            f"по нему потом будет составляться турнирная таблица."
-            f"\nДобавьте имя пользователя в профиле и попробуйте снова.", reply_markup=DAY1_KB)
+        except Exception as e:
+            await message.answer(
+                f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
+                f"по нему потом будет составляться турнирная таблица."
+                f"\nДобавьте имя пользователя в профиле и попробуйте снова.", reply_markup=DAY1_KB)
+            await state.clear()
         await state.clear()
-    await state.clear()
+    else:
+        try:
+            await update_result2_for_user(session, telegram_id, data)
+            await message.answer("Первый день есть!\nЖдем вас завтра.", reply_markup=DAY2_KB, parse_mode='Markdown')
+            await message.answer("Нажмите команду /day_2 или кнопку, чтобы добавить вторую пробежку",
+                                 reply_markup=DAY2_KB)
+
+        except Exception as e:
+            await message.answer(
+                f"Данные не сохранены. Проверьте, что в ваш телеграм аккаунт введено имя пользователя, "
+                f"по нему потом будет составляться турнирная таблица."
+                f"\nДобавьте имя пользователя в профиле и попробуйте снова.", reply_markup=DAY1_KB)
+            await state.clear()
+        await state.clear()
 
 
 @user_router.message(AddResult_1.story_1)
@@ -536,6 +557,8 @@ async def add_story_3(message: types.Message, state: FSMContext, session: AsyncS
         await update_result3_for_user(session, telegram_id, data)
         await message.answer("Поздравляем с завершением челленджа и до встречи на марафоне! 🌴",
                              parse_mode='Markdown')
+        await message.answer("Получите промо-код на скидку 15% для себя и друзей по команде /promo",
+                             parse_mode='Markdown')
         await message.answer("Сомневаетесь в правильности введеных результатов? "
                              "Вы можете проверить его по команде /result",
                              reply_markup=CHECK_KB)
@@ -558,7 +581,7 @@ async def story_3_validation(message: types.Message):
 
 
 @user_router.message(StateFilter(None), or_f(Command("result"), F.text == "Показать мой результат"))
-async def get_result_(message: types.Message, session: AsyncSession):
+async def get_result(message: types.Message, session: AsyncSession):
     telegram_id = message.from_user.id
     distance = await get_user_results(session, telegram_id)
     is_user_exist = await get_user_unique(session, telegram_id)
@@ -579,6 +602,23 @@ async def get_result_(message: types.Message, session: AsyncSession):
         await message.answer("Вы еще не зарегистрировались. "
                              "\nПопробуйте начать сначала",
                              reply_markup=START_KB)
+
+
+@user_router.message(StateFilter(None), or_f(Command("promo"), F.text == "Получить промо-код"))
+async def check_result(message: types.Message, session: AsyncSession):
+    telegram_id = message.from_user.id
+    check_result = await check_distances_filled(session, telegram_id)
+
+    if check_result is False:
+        await message.answer(f"Вы не выполнили все условия, чтобы получить промо-код. "
+                             f"Проверьте, что вы записали все дни тренировок по команде /result",
+                             reply_markup=CHECK_KB)
+    else:
+        promo_code = await get_promo_code(session, telegram_id)
+        await message.answer(f"Поздравляем! Вот ваш промо-код на скидку 15% для регистрации на RAY Sirius Autodrom:"
+                             f"\n*{promo_code}*"
+                             f"\nПромо-кодом  можно воспользоваться 3 раза, зови друзей и родных и бегите командой!",
+                             parse_mode='Markdown')
 
 # """код отмены"""
 #
