@@ -15,6 +15,10 @@ pip-selfcheck.json
 ### dotenv template
 .env
 
+# Secrets
+secrets/
+secrets/*
+
 ### Python template
 # Byte-compiled / optimized / DLL files
 __pycache__/

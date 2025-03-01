@@ -1,41 +1,75 @@
-from aiogram.types import KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from typing import Dict, List, Optional, Tuple, Union
+from aiogram.types import KeyboardButton, InlineKeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 
 
-def get_keyboard(
-        *btns: str,
-        placeholder: str = None,
-        request_contact: int = None,
-        request_location: int = None,
-        sizes: tuple[int] = (2, 2),
-):
+class KeyboardFactory:
+    @staticmethod
+    def create_reply_keyboard(
+        buttons: Union[List[str], Tuple[str, ...]],
+        placeholder: Optional[str] = None,
+        request_contact_index: Optional[int] = None,
+        request_location_index: Optional[int] = None,
+        sizes: Tuple[int, ...] = (2, 2)
+    ) -> ReplyKeyboardMarkup:
+        """
+        Создает обычную клавиатуру с возможностью запроса контакта или локации
+        """
+        keyboard = ReplyKeyboardBuilder()
 
-    keyboard = ReplyKeyboardBuilder()
+        for index, text in enumerate(buttons):
+            if request_contact_index and request_contact_index == index:
+                keyboard.add(KeyboardButton(text=text, request_contact=True))
+            elif request_location_index and request_location_index == index:
+                keyboard.add(KeyboardButton(text=text, request_location=True))
+            else:
+                keyboard.add(KeyboardButton(text=text))
 
-    for index, text in enumerate(btns, start=0):
+        return keyboard.adjust(*sizes).as_markup(
+            resize_keyboard=True,
+            input_field_placeholder=placeholder
+        )
 
-        if request_contact and request_contact == index:
-            keyboard.add(KeyboardButton(text=text, request_contact=True))
+    @staticmethod
+    def create_inline_keyboard(
+        buttons: Dict[str, str],
+        sizes: Tuple[int, ...] = (2,),
+        keyboard_type: str = 'mixed'
+    ) -> InlineKeyboardMarkup:
+        """
+        Создает инлайн-клавиатуру с поддержкой callback, url или смешанных кнопок
+        keyboard_type может быть: 'callback', 'url' или 'mixed'
+        """
+        keyboard = InlineKeyboardBuilder()
 
-        elif request_location and request_location == index:
-            keyboard.add(KeyboardButton(text=text, request_location=True))
-        else:
+        for text, value in buttons.items():
+            if keyboard_type == 'callback':
+                keyboard.add(InlineKeyboardButton(text=text, callback_data=value))
+            elif keyboard_type == 'url':
+                keyboard.add(InlineKeyboardButton(text=text, url=value))
+            else:  # mixed
+                if '://' in value:
+                    keyboard.add(InlineKeyboardButton(text=text, url=value))
+                else:
+                    keyboard.add(InlineKeyboardButton(text=text, callback_data=value))
+
+        return keyboard.adjust(*sizes).as_markup()
+
+    @staticmethod
+    def create_list_keyboard(
+        buttons: List[str],
+        placeholder: Optional[str] = None,
+        sizes: Tuple[int, ...] = (2, 2)
+    ) -> ReplyKeyboardMarkup:
+        """
+        Создает клавиатуру из списка кнопок
+        """
+        keyboard = ReplyKeyboardBuilder()
+        
+        for text in buttons:
             keyboard.add(KeyboardButton(text=text))
 
-    return keyboard.adjust(*sizes).as_markup(
-        resize_keyboard=True, input_field_placeholder=placeholder)
-
-def get_keyboard_list(
-        *btns: tuple,
-        placeholder: str = None,
-        # request_contact: int = None,
-        # request_location: int = None,
-        sizes: tuple[int] = (2, 2),
-):
-
-    keyboard = ReplyKeyboardBuilder()
-
-    for text in btns[0]:
-        keyboard.add(KeyboardButton(text=text))
-
-    return keyboard.adjust(*sizes).as_markup(resize_keyboard=True, input_field_placeholder=placeholder)
+        return keyboard.adjust(*sizes).as_markup(
+            resize_keyboard=True,
+            input_field_placeholder=placeholder
+        )

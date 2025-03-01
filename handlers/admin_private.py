@@ -15,17 +15,22 @@ from handlers.chat_types import ChatTypeFilter, IsAdmin
 from database.orm_query import get_user_results, get_user_login, get_user_id, get_users_all, \
     get_users_with_distance_1_2_no_distance_3, get_users_with_distance_1_no_distance_2, get_users_not_in_result, \
     get_users_not_in_user
-from handlers.keyboards import get_keyboard
+from handlers.keyboards import KeyboardFactory
 
 admin_router = Router()
 admin_router.message.filter(ChatTypeFilter(["private"]), IsAdmin())
 
-ADMIN_KB = get_keyboard(
-    "Проверить фото по ID пользователя",
-    "Проверить фото по username",
-    "Проверить фото по ID записи",
-    "Отправить сообщение всем участникам",
-    "Включить напоминания участникам",
+# Инициализация фабрики клавиатур
+kb = KeyboardFactory()
+
+ADMIN_KB = kb.create_reply_keyboard(
+    [
+        "Проверить фото по ID пользователя",
+        "Проверить фото по username",
+        "Проверить фото по ID записи",
+        "Отправить сообщение всем участникам",
+        "Включить напоминания участникам"
+    ],
     placeholder="Выберите действие",
     sizes=(1, 1, 1, 1, 1)
 )
@@ -265,7 +270,7 @@ async def sent_message(message: types.Message, state: FSMContext):
 
 @admin_router.message(MyForm.message)
 async def handle_message_for_broadcast(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
-    await state.set_state()
+    await state.clear()
     user_ids = await get_users_all(session)
     for user_id in user_ids:
         print(user_id)

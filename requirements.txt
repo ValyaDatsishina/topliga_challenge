@@ -1,3 +1,4 @@
+# Основные зависимости
 aiofiles==23.2.1
 aiogram==3.4.1
 aiohttp==3.9.5
@@ -34,5 +35,33 @@ tzlocal==5.2
 verboselogs==1.7
 yarl==1.9.4
 
+# Обработка изображений
+Pillow==11.0.0
+
+# Планировщик задач
+APScheduler==3.10.4
+
+# Логирование
+coloredlogs==15.0.1
+verboselogs==1.7
+
+# Утилиты
+aiofiles==23.2.1
+numpy==2.0.1
+pandas==2.2.2
+
+# Зависимости для разработки
+black==24.2.0
+isort==5.13.2
+flake8==7.0.0
+mypy==1.9.0
+pytest==8.0.2
+pytest-asyncio==0.23.5
+pytest-cov==4.1.0
+
+# Типы для статического анализа
+types-python-dateutil==2.9.0.20240316
+types-pytz==2024.1.0.20240203
+types-requests==2.31.0.20240311
+
 pip~=23.2.1
-pillow~=11.0.0

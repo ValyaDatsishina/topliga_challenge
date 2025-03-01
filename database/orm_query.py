@@ -1,419 +1,564 @@
+from typing import List, Tuple, Optional, Dict, Any, Callable, TypeVar, ParamSpec
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update, delete, func
+from sqlalchemy import func, and_
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import SQLAlchemyError
+import logging
+from functools import wraps
 
 from database.models import User, Result1, Telegram_ID, Promo
 
-"""Добавление в бд нового участника"""
+__all__ = [
+    'DatabaseManager',
+    'DatabaseException',
+    'UserNotFoundError',
+    'ResultNotFoundError',
+    # Функции обратной совместимости
+    'add_user',
+    'get_users_all',
+    'get_users_not_in_user',
+    'get_users_not_in_result',
+    'get_users_with_distance_1_no_distance_2',
+    'get_users_with_distance_1_2_no_distance_3',
+    'get_user_unique',
+    'get_user_distances',
+    'check_distances_filled',
+    'get_total_distance',
+    'get_promo_code',
+    'get_user_results',
+    'update_result1_for_user',
+    'update_result2_for_user',
+    'update_result3_for_user',
+    'add_result_for_user',
+    'get_user_login',
+    'get_user_id'
+]
 
+logger = logging.getLogger(__name__)
 
-async def add_user(session: AsyncSession, data: dict):
-    obj = User(
-        telegram_id=data['telegram_id'],
-        telegram_login=data['telegram_login'],
-        name=data['name'],
-        phone=data['phone'],
-        email=data['email'],
-        date_reg=data['date_reg'],
-    )
+# Типы для декоратора
+P = ParamSpec('P')
+T = TypeVar('T')
 
-    # Проверяем, существует ли telegram_id в таблице Telegram_ID
-    result = await session.execute(select(Telegram_ID).filter_by(telegram_id=data['telegram_id']))
-    existing_telegram_id = result.scalars().first()
+class DatabaseException(Exception):
+    """Базовый класс для исключений базы данных"""
+    pass
 
-    # Если telegram_id не существует, добавляем его
-    if existing_telegram_id is None:
-        telegram_id = Telegram_ID(telegram_id=data['telegram_id'])
-        session.add(telegram_id)
+class UserNotFoundError(DatabaseException):
+    """Исключение для случая, когда пользователь не найден"""
+    pass
 
-    session.add(obj)
-    await session.commit()
+class ResultNotFoundError(DatabaseException):
+    """Исключение для случая, когда результат не найден"""
+    pass
 
-
-"""Выгрузка всех Telegram ID участников"""
-
-
-async def get_users_all(session: AsyncSession):
-    query = select(Telegram_ID.telegram_id)
-    result = await session.execute(query)
-    user_ids = [row[0] for row in result.fetchall()]
-    return user_ids
-
-
-"""Выгрузка  Telegram ID участников, которые не зарегистрировались"""
-
-
-async def get_users_not_in_user(session: AsyncSession):
-    query = select(Telegram_ID.telegram_id).where(
-        Telegram_ID.telegram_id.notin_(
+class DatabaseManager:
+    """
+    Класс для управления операциями с базой данных.
+    
+    Пример использования:
+        db = DatabaseManager(session)
+        await db.add_user(user_data)
+        distances = await db.get_user_distances(telegram_id)
+    """
+    
+    def __init__(self, session: AsyncSession):
+        self.session = session
+    
+    async def _execute_query(self, query, error_message: str):
+        """Выполняет запрос с обработкой ошибок"""
+        try:
+            result = await self.session.execute(query)
+            return result
+        except SQLAlchemyError as e:
+            logger.error(f"{error_message}: {str(e)}")
+            raise DatabaseException(error_message)
+    
+    async def add_user(self, data: Dict[str, Any]) -> None:
+        """Добавляет нового пользователя"""
+        try:
+            # Создаем пользователя
+            user = User(
+                telegram_id=data['telegram_id'],
+                telegram_login=data['telegram_login'],
+                name=data['name'],
+                phone=data['phone'],
+                email=data['email'],
+                date_reg=data['date_reg']
+            )
+            
+            # Проверяем существование telegram_id
+            query = select(Telegram_ID).filter_by(telegram_id=data['telegram_id'])
+            result = await self._execute_query(query, "Ошибка при проверке telegram_id")
+            
+            if not result.scalars().first():
+                telegram_id = Telegram_ID(telegram_id=data['telegram_id'])
+                self.session.add(telegram_id)
+            
+            self.session.add(user)
+            await self.session.commit()
+            
+        except Exception as e:
+            await self.session.rollback()
+            logger.error(f"Ошибка при добавлении пользователя: {str(e)}")
+            raise
+    
+    async def get_users_all(self) -> List[int]:
+        """Получает все Telegram ID пользователей"""
+        query = select(Telegram_ID.telegram_id)
+        result = await self._execute_query(query, "Ошибка при получении пользователей")
+        return [row[0] for row in result.fetchall()]
+    
+    async def get_users_not_registered(self) -> List[int]:
+        """Получает Telegram ID незарегистрированных пользователей"""
+        query = (
+            select(Telegram_ID.telegram_id)
+            .outerjoin(User, Telegram_ID.telegram_id == User.telegram_id)
+            .where(User.telegram_id.is_(None))
+        )
+        result = await self._execute_query(query, "Ошибка при получении незарегистрированных пользователей")
+        return [row[0] for row in result.fetchall()]
+    
+    async def get_users_without_first_day(self) -> List[int]:
+        """Получает пользователей без результатов первого дня"""
+        query = (
             select(User.telegram_id)
+            .outerjoin(Result1, User.id == Result1.user_id)
+            .where(Result1.user_id.is_(None))
         )
-    )
-
-    result = await session.execute(query)
-    user_ids = [row[0] for row in result.fetchall()]
-    return user_ids
-
-
-"""Выгрузка  Telegram ID участников, которые зарегистрировались, но не записали первый день """
-
-
-async def get_users_not_in_result(session: AsyncSession):
-    # Запрос для получения telegram_id из User, которых нет в Result
-    query = select(User.telegram_id).where(
-        User.id.notin_(
-            select(Result1.user_id)
-        )
-    )
-
-    result = await session.execute(query)
-    telegram_ids = [row[0] for row in result.fetchall()]
-    return telegram_ids
-
-
-"""Выгрузка Telegram ID участников, у которых есть первый день и нет второго  """
-
-
-async def get_users_with_distance_1_no_distance_2(session: AsyncSession):
-    # Запрос для получения telegram_id из User, у которых есть distance_1 и нет distance_2 в Result
-    query = select(User.telegram_id).where(
-        User.id.in_(
-            select(Result1.user_id).where(
-                Result1.distance_1.isnot(None),  # distance_1 должно быть не None
-                Result1.distance_2.is_(None)  # distance_2 должно быть None
-            )
-        )
-    )
-
-    result = await session.execute(query)
-    telegram_ids = [row[0] for row in result.fetchall()]
-    return telegram_ids
-
-
-"""Выгрузка Telegram ID участников, у которых есть первый и второй день и нет третьего  """
-
-
-async def get_users_with_distance_1_2_no_distance_3(session: AsyncSession):
-    # Запрос для получения telegram_id из User, у которых есть distance_1 и нет distance_2 в Result
-    query = select(User.telegram_id).where(
-        User.id.in_(
-            select(Result1.user_id).where(
+        result = await self._execute_query(query, "Ошибка при получении пользователей без первого дня")
+        return [row[0] for row in result.fetchall()]
+    
+    async def get_users_with_incomplete_results(self, day: int) -> List[int]:
+        """Получает пользователей с неполными результатами"""
+        conditions = {
+            1: and_(Result1.distance_1.isnot(None), Result1.distance_2.is_(None)),
+            2: and_(
                 Result1.distance_1.isnot(None),
-                Result1.distance_2.isnot(None),  # distance_1 должно быть не None
-                Result1.distance_3.is_(None)  # distance_2 должно быть None
+                Result1.distance_2.isnot(None),
+                Result1.distance_3.is_(None)
             )
+        }
+        
+        if day not in conditions:
+            raise ValueError(f"Неверный день: {day}")
+        
+        query = (
+            select(User.telegram_id)
+            .join(Result1, User.id == Result1.user_id)
+            .where(conditions[day])
         )
-    )
-
-    result = await session.execute(query)
-    telegram_ids = [row[0] for row in result.fetchall()]
-    return telegram_ids
-
-
-"""Проверка на наличие Telegram ID"""
-
-
-async def get_user_unique(session: AsyncSession, telegram_id: int):
-    query = select(func.count(User.telegram_id)).where(User.telegram_id == telegram_id)
-    result = await session.execute(query)
-    user_count = result.scalars().all()
-    print(f'user_count={user_count[0]}')
-    if user_count[0] == 0:
-        return False
-    else:
-        return True
-
-
-"""Проверка на наличие записи в result"""
-
-
-async def get_result_unique(session: AsyncSession, telegram_id: int):
-    result = await session.execute(
-        select(func.count(Result1.user_id))
-        .where(User.telegram_id == telegram_id)
-        .join(User, Result1.user_id == User.id)
-    )
-    # result = await session.execute(query)
-    user_count = result.scalars().all()
-    print(f'user_count={user_count[0]}')
-    if user_count[0] == 0:
-        return False
-    else:
-        return True
-
-
-"""Выгрузка дистанций по Telegram ID"""
-
-
-async def get_user_distances(session: AsyncSession, telegram_id: int):
-    result = await session.execute(
-        select(Result1)
-        .where(User.telegram_id == telegram_id)
-        .join(User, Result1.user_id == User.id)
-    )
-
-    distances = result.scalars().all()  # Получаем все результаты
-
-    distance_1 = 0
-    distance_2 = 0
-    distance_3 = 0
-
-    for entry in distances:
-        distance_1 += entry.distance_1
-        distance_2 += entry.distance_2
-        distance_3 += entry.distance_3
-
-    return distance_1, distance_2, distance_3
-
-
-"""Проверка, что участник бежал все дни"""
-
-
-async def check_distances_filled(session: AsyncSession, telegram_id: int) -> bool:
-    result = await session.execute(
-        select(Result1)
-        .where(User.telegram_id == telegram_id)
-        .join(User, Result1.user_id == User.id)
-    )
-    user = result.scalars().first()
-
-    if not user:
-        return False
-
-    results = user.result
-    if not results:
-        return False
-
-    if user.distance_1 is None or user.distance_2 is None or user.distance_3 is None:
-        return False
-
-    return True
-
-
-"""Подсчет результата всех дней"""
-
-
-async def get_total_distance(session: AsyncSession, telegram_id: int) -> float:
-    # Выполняем запрос для получения суммы
-    result = await session.execute(
-        select(
-            func.coalesce(func.sum(Result1.distance_1), 0) +
-            func.coalesce(func.sum(Result1.distance_2), 0)
-        ).join(User).filter(User.telegram_id == telegram_id)
-    )
-
-    total_distance = result.scalar_one_or_none()
-    return total_distance or 0.0
-
-
-"""Выдача промо-кода"""
-
-
-async def get_promo_code(session: AsyncSession, telegram_id: int) -> str:
-    # Получаем результат по ID
-    user_query = await session.execute(select(User).filter(User.telegram_id == telegram_id))
-    user = user_query.scalars().first()
-
-    if not user:
-        return "User  not found"
-
-    user_id = user.id  # Получаем user_id
-
-    # Получаем результаты по user_id
-    result_query = await session.execute(select(Result1).filter(Result1.user_id == user_id))
-    result = result_query.scalars().first()
-
-    if not result:
-        return "Result not found"
-
-    promo_query = await session.execute(select(Promo).filter(Promo.id == result.id))  # Замените условие, если нужно
-    promo = promo_query.scalars().first()
-
-    if not promo:
-        return "Promo code not found"
-
-    return promo.Code
-
-
-"""Выгрузка информации про участника по Telegram ID"""
-
-
-async def get_user_results(session: AsyncSession, telegram_id):
-    result = await session.execute(
-        select(User, Result1).join(Result1).filter(User.telegram_id == telegram_id)
-    )
-
-    results = result.first()
-    # Получаем все результаты
-    return results
-
-
-"""Выгрузка информации про участника по login"""
-
-
-async def get_user_login(session: AsyncSession, telegram_login):
-    result = await session.execute(
-        select(User, Result1).join(Result1).filter(User.telegram_login == telegram_login)
-    )
-
-    results = result.first()  # Получаем все результаты
-    return results
-
-
-"""Выгрузка информации про участника по id записи"""
-
-
-async def get_user_id(session: AsyncSession, result_id):
-    result = await session.execute(
-        select(User, Result1).join(Result1).filter(Result1.id == result_id)
-    )
-
-    results = result.first()  # Получаем все результаты
-    return results
-
-
-async def get_user_for_change(session: AsyncSession, telegram_id: int):
-    query = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(query)
-    return result.scalar()
-
-
-"""Изменение данных участника"""
-
-
-async def update_user(session: AsyncSession, telegram_id: int, data):
-    query = update(User).where(User.id == telegram_id).values(
-        telegram_id=data['telegram_id'],
-        name=data['name'],
-        phone=data['phone'],
-        email=data['email'],
-        date_reg=data['date_reg'],
-    )
-    await session.execute(query)
-    await session.commit()
-
-
-"""Добавление записи результатов участника за 1ый день"""
-
-
-async def add_result_for_user(session: AsyncSession, telegram_id: int, data):
-    # Найти пользователя по telegram_id
-    user_query = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(user_query)
-    user = result.scalars().first()
-
-    if user is None:
-        raise ValueError(f"User  with telegram_id {telegram_id} not found.")
-
-    # Создать новую запись в таблице Result
-    new_result = Result1(
-        user_id=user.id,  # Устанавливаем связь с пользователем
-        distance_1=data.get('distance_1'),
-        photo_1=data.get('photo_1'),
-        story_1=data.get('story_1'),
-        date_1=data.get('date_1')
-    )
-
-    session.add(new_result)
-    await session.commit()
-
-
-"""Изменение результатов участника за 1ый день"""
-
-
-async def update_result1_for_user(session: AsyncSession, telegram_id: int, data):
-    user_query = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(user_query)
-    user = result.scalars().first()
-
-    if user is None:
-        raise ValueError(f"User  with telegram_id {telegram_id} not found.")
-
-    result_query = select(Result1).where(Result1.user_id == user.id)
-    result_record = await session.execute(result_query)
-    existing_result = result_record.scalars().first()
-
-    if existing_result is None:
-        raise ValueError(f"No result found for user with telegram_id {telegram_id}.")
-
-    # Обновить поля записи
-    existing_result.distance_1 = data.get('distance_1', existing_result.distance_1)
-    existing_result.photo_1 = data.get('photo_1', existing_result.photo_1)
-    existing_result.story_1 = data.get('story_1', existing_result.story_1)
-    existing_result.date_1 = data.get('date_1', existing_result.date_1)
-
-    # Сохранить изменения
-    await session.commit()
-
-    return existing_result  # Возвращаем обновленную запись
-
-
-"""Изменение результатов участника за 2ый день"""
-
-
-async def update_result2_for_user(session: AsyncSession, telegram_id: int, data):
-    user_query = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(user_query)
-    user = result.scalars().first()
-
-    if user is None:
-        raise ValueError(f"User  with telegram_id {telegram_id} not found.")
-
-    result_query = select(Result1).where(Result1.user_id == user.id)
-    result_record = await session.execute(result_query)
-    existing_result = result_record.scalars().first()
-
-    if existing_result is None:
-        raise ValueError(f"No result found for user with telegram_id {telegram_id}.")
-
-    # Обновить поля записи
-    existing_result.distance_2 = data.get('distance_2', existing_result.distance_2)
-    existing_result.photo_2 = data.get('photo_2', existing_result.photo_2)
-    existing_result.story_2 = data.get('story_2', existing_result.story_2)
-    existing_result.date_2 = data.get('date_2', existing_result.date_2)
-
-    # Сохранить изменения
-    await session.commit()
-
-    return existing_result  # Возвращаем обновленную запись
-
-
-"""Изменение результатов участника за 3ый день"""
-
-
-async def update_result3_for_user(session: AsyncSession, telegram_id: int, data):
-    user_query = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(user_query)
-    user = result.scalars().first()
-
-    if user is None:
-        raise ValueError(f"User  with telegram_id {telegram_id} not found.")
-
-    result_query = select(Result1).where(Result1.user_id == user.id)
-    result_record = await session.execute(result_query)
-    existing_result = result_record.scalars().first()
-
-    if existing_result is None:
-        raise ValueError(f"No result found for user with telegram_id {telegram_id}.")
-
-    # Обновить поля записи
-    existing_result.distance_3 = data.get('distance_3', existing_result.distance_3)
-    existing_result.photo_3 = data.get('photo_3', existing_result.photo_3)
-    existing_result.story_3 = data.get('story_3', existing_result.story_3)
-    existing_result.date_3 = data.get('date_3', existing_result.date_3)
-    existing_result.result = data.get('result', existing_result.result)
-
-    # Сохранить изменения
-    await session.commit()
-
-    return existing_result  # Возвращаем обновленную запись
-
-
-"""Удаление данных участника"""
-
-
-async def delete_user(session: AsyncSession, telegram_id: int):
-    query = delete(User).where(User.id == telegram_id)
-    await session.execute(query)
-    await session.commit()
+        
+        result = await self._execute_query(query, f"Ошибка при получении пользователей с неполными результатами дня {day}")
+        return [row[0] for row in result.fetchall()]
+    
+    def _get_user_unique_sync(self, telegram_id: int) -> bool:
+        """Синхронная версия проверки существования пользователя для кэширования"""
+        return telegram_id in self._user_cache
+
+    @property
+    def _user_cache(self) -> set:
+        """Кэш для хранения telegram_id пользователей"""
+        if not hasattr(self, '_user_id_cache'):
+            self._user_id_cache = set()
+        return self._user_id_cache
+
+    async def get_user_unique(self, telegram_id: int) -> bool:
+        """Проверяет существование пользователя"""
+        # Проверяем кэш
+        if telegram_id in self._user_cache:
+            return True
+            
+        # Если нет в кэше, проверяем базу
+        query = select(func.count(User.telegram_id)).where(User.telegram_id == telegram_id)
+        result = await self._execute_query(query, "Ошибка при проверке пользователя")
+        exists = bool(result.scalar())
+        
+        # Если пользователь существует, добавляем в кэш
+        if exists:
+            self._user_cache.add(telegram_id)
+            
+        return exists
+    
+    async def get_user_distances(self, telegram_id: int) -> Tuple[float, float, float]:
+        """
+        Получает дистанции пользователя
+        
+        Args:
+            telegram_id: ID пользователя в Telegram
+            
+        Returns:
+            Tuple[float, float, float]: Кортеж с дистанциями за три дня
+            
+        Raises:
+            UserNotFoundError: Если пользователь не найден
+            DatabaseException: При ошибках работы с базой данных
+        """
+        try:
+            # Проверяем существование пользователя
+            user_exists = await self.get_user_unique(telegram_id)
+            if not user_exists:
+                raise UserNotFoundError(f"Пользователь не найден: {telegram_id}")
+            
+            # Получаем результаты
+            query = (
+                select(Result1)
+                .join(User)
+                .where(User.telegram_id == telegram_id)
+                .options(selectinload(Result1.user))
+            )
+            result = await self._execute_query(query, "Ошибка при получении дистанций")
+            distances = result.scalars().first()
+            
+            if not distances:
+                logger.info(f"Результаты не найдены для пользователя {telegram_id}")
+                return 0.0, 0.0, 0.0
+            
+            # Преобразуем None в 0.0 и проверяем типы
+            return (
+                float(distances.distance_1 or 0.0),
+                float(distances.distance_2 or 0.0),
+                float(distances.distance_3 or 0.0)
+            )
+            
+        except UserNotFoundError:
+            raise
+        except (ValueError, TypeError) as e:
+            logger.error(f"Ошибка преобразования данных для пользователя {telegram_id}: {e}")
+            return 0.0, 0.0, 0.0
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при получении дистанций для пользователя {telegram_id}: {e}")
+            raise DatabaseException(f"Ошибка при получении дистанций: {e}")
+    
+    async def check_distances_filled(self, telegram_id: int) -> bool:
+        """
+        Проверяет заполнение всех дистанций
+        
+        Args:
+            telegram_id: ID пользователя в Telegram
+            
+        Returns:
+            bool: True если все дистанции заполнены, False иначе
+            
+        Raises:
+            UserNotFoundError: Если пользователь не найден
+            DatabaseException: При ошибках работы с базой данных
+        """
+        try:
+            distances = await self.get_user_distances(telegram_id)
+            return all(isinstance(d, (int, float)) and d > 0 for d in distances)
+        except UserNotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Ошибка при проверке дистанций для пользователя {telegram_id}: {e}")
+            raise DatabaseException(f"Ошибка при проверке дистанций: {e}")
+    
+    async def get_total_distance(self, telegram_id: int) -> float:
+        """
+        Получает общую дистанцию пользователя
+        
+        Args:
+            telegram_id: ID пользователя в Telegram
+            
+        Returns:
+            float: Общая дистанция
+            
+        Raises:
+            UserNotFoundError: Если пользователь не найден
+            DatabaseException: При ошибках работы с базой данных
+        """
+        try:
+            # Проверяем существование пользователя
+            user_exists = await self.get_user_unique(telegram_id)
+            if not user_exists:
+                raise UserNotFoundError(f"Пользователь не найден: {telegram_id}")
+            
+            # Получаем сумму дистанций
+            query = (
+                select(
+                    func.coalesce(func.sum(Result1.distance_1), 0.0) +
+                    func.coalesce(func.sum(Result1.distance_2), 0.0) +
+                    func.coalesce(func.sum(Result1.distance_3), 0.0)
+                )
+                .join(User)
+                .filter(User.telegram_id == telegram_id)
+            )
+            
+            result = await self._execute_query(query, "Ошибка при подсчете общей дистанции")
+            total = result.scalar()
+            
+            # Проверяем и преобразуем результат
+            if total is None:
+                logger.info(f"Нет результатов для пользователя {telegram_id}")
+                return 0.0
+                
+            try:
+                return float(total)
+            except (ValueError, TypeError) as e:
+                logger.error(f"Ошибка преобразования общей дистанции для пользователя {telegram_id}: {e}")
+                return 0.0
+                
+        except UserNotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при подсчете общей дистанции для пользователя {telegram_id}: {e}")
+            raise DatabaseException(f"Ошибка при подсчете общей дистанции: {e}")
+    
+    async def get_promo_code(self, telegram_id: int) -> str:
+        """Получает промокод пользователя"""
+        query = (
+            select(Promo)
+            .join(Result1)
+            .join(User)
+            .filter(User.telegram_id == telegram_id)
+        )
+        
+        result = await self._execute_query(query, "Ошибка при получении промокода")
+        promo = result.scalars().first()
+        
+        if not promo:
+            return "Промокод не найден"
+        
+        return promo.Code
+    
+    async def get_user_results(self, telegram_id: int) -> Optional[Tuple[User, Result1]]:
+        """Получает результаты пользователя"""
+        query = (
+            select(User, Result1)
+            .join(Result1)
+            .filter(User.telegram_id == telegram_id)
+            .options(selectinload(User.results))
+        )
+        
+        result = await self._execute_query(query, "Ошибка при получении результатов")
+        return result.first()
+    
+    async def update_result(self, telegram_id: int, data: Dict[str, Any], day: int) -> None:
+        """Обновляет результаты пользователя"""
+        try:
+            # Получаем пользователя
+            user_query = select(User).filter(User.telegram_id == telegram_id)
+            user_result = await self._execute_query(user_query, "Ошибка при получении пользователя")
+            user = user_result.scalars().first()
+            
+            if not user:
+                raise UserNotFoundError(f"Пользователь не найден: {telegram_id}")
+            
+            # Получаем или создаем результат
+            result_query = select(Result1).filter(Result1.user_id == user.id)
+            result = await self._execute_query(result_query, "Ошибка при получении результата")
+            result = result.scalars().first()
+            
+            if not result:
+                result = Result1(user_id=user.id)
+                self.session.add(result)
+            
+            # Обновляем данные
+            distance = float(data.get('distance', 0))
+            photo = data.get(f'photo_{day}')
+            story = data.get(f'story_{day}')
+            date = data.get(f'date_{day}')
+            
+            setattr(result, f'distance_{day}', distance)
+            setattr(result, f'photo_{day}', photo)
+            setattr(result, f'story_{day}', story)
+            setattr(result, f'date_{day}', date)
+            
+            if day == 3:
+                result.result = await self.get_total_distance(telegram_id) + distance
+            
+            await self.session.commit()
+            
+        except Exception as e:
+            await self.session.rollback()
+            logger.error(f"Ошибка при обновлении результата: {str(e)}")
+            raise
+
+    async def add_result_for_user(self, telegram_id: int, data: Dict[str, Any], day: int) -> None:
+        """
+        Добавляет или обновляет результат пользователя за определенный день
+        
+        Args:
+            telegram_id: ID пользователя в Telegram
+            data: Данные результата (distance, photo, story, date)
+            day: Номер дня (1-3)
+            
+        Raises:
+            UserNotFoundError: Если пользователь не найден
+            ValueError: Если указан неверный день
+            DatabaseException: При ошибках работы с базой данных
+        """
+        try:
+            if day not in [1, 2, 3]:
+                raise ValueError(f"Неверный день: {day}")
+
+            # Получаем пользователя
+            query = select(User).where(User.telegram_id == telegram_id)
+            result = await self._execute_query(query, "Ошибка при получении пользователя")
+            user = result.scalars().first()
+            
+            if not user:
+                raise UserNotFoundError(f"Пользователь не найден: {telegram_id}")
+            
+            # Получаем или создаем запись результата
+            result_query = select(Result1).where(Result1.user_id == user.id)
+            result = await self._execute_query(result_query, "Ошибка при получении результата")
+            result_record = result.scalars().first()
+            
+            if not result_record:
+                result_record = Result1(user_id=user.id)
+                self.session.add(result_record)
+            
+            # Обновляем данные
+            distance = float(data.get('distance', 0))
+            photo = data.get('photo')
+            story = data.get('story')
+            date = data.get('date')
+            
+            setattr(result_record, f'distance_{day}', distance)
+            setattr(result_record, f'photo_{day}', photo)
+            setattr(result_record, f'story_{day}', story)
+            setattr(result_record, f'date_{day}', date)
+            
+            # Обновляем общий результат если это последний день
+            if day == 3:
+                total_distance = await self.get_total_distance(telegram_id)
+                result_record.result = total_distance + distance
+            
+            await self.session.commit()
+            logger.info(f"Результат за день {day} успешно добавлен для пользователя {telegram_id}")
+            
+        except (ValueError, TypeError) as e:
+            await self.session.rollback()
+            logger.error(f"Ошибка в данных при добавлении результата: {e}")
+            raise ValueError(f"Ошибка в данных результата: {e}")
+        except UserNotFoundError:
+            await self.session.rollback()
+            raise
+        except Exception as e:
+            await self.session.rollback()
+            logger.error(f"Ошибка при добавлении результата: {e}")
+            raise DatabaseException(f"Ошибка при добавлении результата: {e}")
+
+    async def get_user_login(self, telegram_login: str) -> Optional[User]:
+        """
+        Получает пользователя по его логину в Telegram
+        
+        Args:
+            telegram_login: Логин пользователя в Telegram
+            
+        Returns:
+            Optional[User]: Объект пользователя или None, если не найден
+        """
+        try:
+            query = select(User).where(User.telegram_login == telegram_login)
+            result = await self.session.execute(query)
+            return result.scalars().first()
+        except SQLAlchemyError as e:
+            logger.error(f"Ошибка при получении пользователя по логину {telegram_login}: {e}")
+            raise DatabaseException(f"Ошибка при получении пользователя: {e}")
+
+    async def get_user_id(self, result_id: int) -> Optional[Tuple[User, Result1]]:
+        """
+        Получает пользователя и его результаты по ID результата
+        
+        Args:
+            result_id: ID записи результата
+            
+        Returns:
+            Optional[Tuple[User, Result1]]: Кортеж с пользователем и его результатами или None
+        """
+        try:
+            query = (
+                select(User, Result1)
+                .join(Result1)
+                .filter(Result1.id == result_id)
+                .options(selectinload(User.results))
+            )
+            result = await self._execute_query(query, "Ошибка при получении пользователя по ID результата")
+            return result.first()
+        except SQLAlchemyError as e:
+            logger.error(f"Ошибка при получении пользователя по ID результата {result_id}: {e}")
+            raise DatabaseException(f"Ошибка при получении пользователя: {e}")
+
+def with_db_manager(func: Callable[Tuple[DatabaseManager, P], T]) -> Callable[Tuple[AsyncSession, P], T]:
+    """Декоратор для создания функций обратной совместимости"""
+    @wraps(func)
+    async def wrapper(session: AsyncSession, *args: P.args, **kwargs: P.kwargs) -> T:
+        db = DatabaseManager(session)
+        return await func(db, *args, **kwargs)
+    return wrapper
+
+# Функции обратной совместимости
+@with_db_manager
+async def add_user(db: DatabaseManager, data: Dict[str, Any]) -> None:
+    return await db.add_user(data)
+
+@with_db_manager
+async def get_users_all(db: DatabaseManager) -> List[int]:
+    return await db.get_users_all()
+
+@with_db_manager
+async def get_users_not_in_user(db: DatabaseManager) -> List[int]:
+    return await db.get_users_not_registered()
+
+@with_db_manager
+async def get_users_not_in_result(db: DatabaseManager) -> List[int]:
+    return await db.get_users_without_first_day()
+
+@with_db_manager
+async def get_users_with_distance_1_no_distance_2(db: DatabaseManager) -> List[int]:
+    return await db.get_users_with_incomplete_results(1)
+
+@with_db_manager
+async def get_users_with_distance_1_2_no_distance_3(db: DatabaseManager) -> List[int]:
+    return await db.get_users_with_incomplete_results(2)
+
+@with_db_manager
+async def get_user_unique(db: DatabaseManager, telegram_id: int) -> bool:
+    return await db.get_user_unique(telegram_id)
+
+@with_db_manager
+async def get_user_distances(db: DatabaseManager, telegram_id: int) -> Tuple[float, float, float]:
+    return await db.get_user_distances(telegram_id)
+
+@with_db_manager
+async def check_distances_filled(db: DatabaseManager, telegram_id: int) -> bool:
+    return await db.check_distances_filled(telegram_id)
+
+@with_db_manager
+async def get_total_distance(db: DatabaseManager, telegram_id: int) -> float:
+    return await db.get_total_distance(telegram_id)
+
+@with_db_manager
+async def get_promo_code(db: DatabaseManager, telegram_id: int) -> str:
+    return await db.get_promo_code(telegram_id)
+
+@with_db_manager
+async def get_user_results(db: DatabaseManager, telegram_id: int) -> Optional[Tuple[User, Result1]]:
+    return await db.get_user_results(telegram_id)
+
+@with_db_manager
+async def update_result1_for_user(db: DatabaseManager, telegram_id: int, data: Dict[str, Any]) -> None:
+    return await db.update_result(telegram_id, data, 1)
+
+@with_db_manager
+async def update_result2_for_user(db: DatabaseManager, telegram_id: int, data: Dict[str, Any]) -> None:
+    return await db.update_result(telegram_id, data, 2)
+
+@with_db_manager
+async def update_result3_for_user(db: DatabaseManager, telegram_id: int, data: Dict[str, Any]) -> None:
+    return await db.update_result(telegram_id, data, 3)
+
+@with_db_manager
+async def add_result_for_user(db: DatabaseManager, telegram_id: int, data: Dict[str, Any], day: int) -> None:
+    return await db.add_result_for_user(telegram_id, data, day)
+
+@with_db_manager
+async def get_user_login(db: DatabaseManager, telegram_login: str) -> Optional[User]:
+    return await db.get_user_login(telegram_login)
+
+@with_db_manager
+async def get_user_id(db: DatabaseManager, result_id: int) -> Optional[Tuple[User, Result1]]:
+    return await db.get_user_id(result_id)
