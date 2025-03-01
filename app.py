@@ -10,7 +10,7 @@ from middlewares.db import DataBaseSession
 from database.engine import create_db, drop_db, session_maker
 
 from handlers.user_private import user_router
-from handlers.admin_private import admin_router
+from handlers.admin_private import admin_router, schedule_message
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)  # Установите уровень логирования для вашего приложения
