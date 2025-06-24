@@ -16,6 +16,7 @@ class User(Base):
 
     results = relationship("Result", back_populates="user")
     results1 = relationship("Result1", back_populates="user")
+    results2 = relationship("Result2", back_populates="user")
 
 
 class Result(Base):
@@ -60,6 +61,28 @@ class Result1(Base):
 
     # Связь с таблицей User
     user = relationship("User", back_populates="results1")
+
+class Result2(Base):
+    __tablename__ = 'result2'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), nullable=False, unique=True)
+    distance_1: Mapped[int] = mapped_column(Float, nullable=True)
+    photo_1: Mapped[str] = mapped_column(String(150), nullable=True)
+    story_1: Mapped[str] = mapped_column(String(150), nullable=True)
+    date_1: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
+    distance_2: Mapped[int] = mapped_column(Float, nullable=True)
+    photo_2: Mapped[str] = mapped_column(String(150), nullable=True)
+    story_2: Mapped[str] = mapped_column(String(150), nullable=True)
+    date_2: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
+    distance_3: Mapped[int] = mapped_column(Float, nullable=True)
+    photo_3: Mapped[str] = mapped_column(String(150), nullable=True)
+    story_3: Mapped[str] = mapped_column(String(150), nullable=True)
+    date_3: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
+    result: Mapped[int] = mapped_column(Float, nullable=True)
+
+    # Связь с таблицей User
+    user = relationship("User", back_populates="results2")
+
 
 
 class Promo(Base):

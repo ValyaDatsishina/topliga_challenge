@@ -14,7 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from handlers.chat_types import ChatTypeFilter, IsAdmin
 from database.orm_query import get_user_results, get_user_login, get_user_id, get_users_all, \
     get_users_with_distance_1_2_no_distance_3, get_users_with_distance_1_no_distance_2, get_users_not_in_result, \
-    get_users_not_in_user
+    get_users_not_in_user, get_users_with_all_distances
 from handlers.keyboards import get_keyboard
 
 admin_router = Router()
@@ -69,14 +69,13 @@ async def send_message_to_all_users(session: AsyncSession, bot: Bot):
 
     message_text = (f"day_of_week = {day_of_week}")
     if day_of_week == "Thursday":
-        message_text = ("Привет от Марафонского бота! На этих выходных начинается второй челлендж посвященный"
-                        " RAY SIRIUS AUTODROM ⚡️\n"
+        message_text = ("Привет от Марафонского бота! На этих выходных начинается заключительный челлендж посвященный"
+                        " RAY SIRIUS AUTODROM ⚡️Это твой последний шанс принять участие в розыгрыше от "
+                        "титульного партнера марафона, спортивного бренда RAY.\n"
                         "\nНапоминаем, что каждый участник челленджа получит:\n"
-                        "- место в рейтинге по завершению Челленджа;\n"
+                        "- место в рейтинге по завершении Челленджа;\n"
                         "- увеличенную скидку на регистрацию на 2 использования; \n"
-                        "- возможность получить уникальную нашивку за участие в двух и более этапах.\n"
-                        "\nСреди тех, кто пройдет два и более этапа будет разыграны призы от титульного партнера марафона, "
-                        "спортивного бренда RAY.")
+                        "- возможность получить уникальную нашивку за участие в двух и более этапах.\n")
         user_ids = await get_users_all(session)
     elif day_of_week == "Friday":
         message_text = (
@@ -89,8 +88,11 @@ async def send_message_to_all_users(session: AsyncSession, bot: Bot):
 
     elif day_of_week == "Sunday":
         message_text = ("Привет! Осталось совсем чуть-чуть, загрузи последний трек /day_3 "
-                        "и ты получишь промо-код на скидку 15% для себя и друзей 🎁")
+                        "и ты получишь промокод на скидку 15% для себя и друзей 🎁")
         user_ids = await get_users_with_distance_1_2_no_distance_3(session)
+    elif day_of_week == "Monday":
+        message_text = ("Привет! Промокод на скидку скоро сгорит, успей зарегаться и позвать друга /promo.")
+        user_ids = await get_users_with_all_distances(session)
     else:
         message_text = "Легких будней!"
         user_ids = await get_users_all(session)
@@ -107,15 +109,52 @@ async def send_message_to_all_users(session: AsyncSession, bot: Bot):
             logging.error(f"Ошибка: {e} - Бот был заблокирован пользователем")
 
 
+scheduler = AsyncIOScheduler()
+
+
 def schedule_message(session: AsyncSession, bot: Bot):
-    scheduler = AsyncIOScheduler()
     # Укажите дни недели (0=понедельник, 6=воскресенье) и время (часы и минуты)
-    scheduler.add_job(
+    job = scheduler.add_job(
         send_message_to_all_users,
-        CronTrigger(day_of_week='thu,fri,sat,sun', hour=16, minute=10),
+        CronTrigger(day_of_week='thu,fri,sat,sun,mon', hour=16, minute=10),
         args=[session, bot]  # Передаем только сессию и бот
     )
-    scheduler.start()
+    # Запускаем планировщик, если он еще не запущен
+    if not scheduler.running:
+        scheduler.start()
+
+    return job.id  # Возвращаем идентификатор задачи
+
+
+async def stop_message_schedule(job_id: str):
+    job = scheduler.get_job(job_id)
+    if job:
+        job.remove()
+        logging.info("Рассылка сообщений остановлена.")
+    else:
+        logging.warning("Задача не найдена.")
+
+
+@admin_router.message(StateFilter(None), F.text == "Остановить рассылку сообщений")
+async def stop_sent_message(message: types.Message, state: FSMContext):
+    job_data = await state.get_data()  # Получаем данные состояния
+    job_id = job_data.get('job_id')  # Извлекаем идентификатор задачи
+    if job_id:
+        await stop_message_schedule(job_id)
+        await message.answer("Рассылка сообщений остановлена.")
+    else:
+        await message.answer("Рассылка сообщений не была запущена.")
+    await state.clear()
+
+
+"""Отложенные отправки сообщений всем участникам"""
+
+
+@admin_router.message(StateFilter(None), F.text == "Включить напоминания участникам")
+async def sent_message(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    await message.answer(f"Сообщения отправляются")
+    schedule_message(session, bot)
+    await state.clear()
 
 
 @admin_router.message(State('*'), or_f(Command("cancel"), F.text.lower() == "отмена"))
@@ -280,13 +319,3 @@ async def handle_message_for_broadcast(message: types.Message, state: FSMContext
             # Обработайте ошибку
             print(f"Ошибка: {e} - Бот был заблокирован пользователем")
             logging.error(f"Ошибка: {e} - Бот был заблокирован пользователем")
-
-
-"""Отложенные отправки сообщений всем участникам"""
-
-
-@admin_router.message(StateFilter(None), F.text == "Включить напоминания участникам")
-async def sent_message(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
-    await message.answer(f"Сообщения отправляются")
-    schedule_message(session, bot)
-    await state.clear()

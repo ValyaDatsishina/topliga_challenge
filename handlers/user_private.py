@@ -134,7 +134,8 @@ async def user_start(message: types.Message, state: FSMContext, session: AsyncSe
         await message.answer(f'Ты уже зарегистрирован! \n'
                              f'\nВ меню, рядом со строчкой ввода текста, видны все доступные команды. '
                              f'Очень важно добавлять записи тренировок по порядку, '
-                             f'чтобы итоговый результат посчитался верно.')
+                             f'чтобы итоговый результат посчитался верно.\n'
+                             f'\nГотов записать первую тренировку, жми /day_1')
         if user_result:
             user, result = user_result
             if not result.distance_1:
@@ -152,10 +153,10 @@ async def user_start(message: types.Message, state: FSMContext, session: AsyncSe
                                      f"\nОтлично, так держать!")
 
     else:
-        await message.answer(f'Привет от марафонского бота 👋 Начинаем подготовку к жаркому открытию сезона, '
-                             f'к RAY SIRIUS AUTODROM ⚡️\n'
+        await message.answer(f'Привет от марафонского бота 👋 Подготовка к жаркому открытию сезона, '
+                             f'к RAY SIRIUS AUTODROM в самом разгаре ⚡️\n'
                              f'\nУсловия челленджа:'
-                             f'\n1. Выходить на пробежку три дня подряд с 14 по 16 февраля;'
+                             f'\n1. Выходить на пробежку три дня подряд с 14 по 16 марта;'
                              f'\n2. Присылать трек пробежки в тот же день в чат-бот;'
                              f'\n3. Выкладывать стори о пробежках в любых соц сетях - картинку с вашем '
                              f'фото пришлет чат-бот!\n'
@@ -663,7 +664,7 @@ async def add_story_3(message: types.Message, state: FSMContext, session: AsyncS
     print(f'telegram_id = {telegram_id}, data = {data}')
     try:
         await update_result3_for_user(session, telegram_id, data)
-        await message.answer("Поздравляем с завершением челленджа и ждем на следующем февральском этапе! ⚡️",
+        await message.answer("Поздравляем с завершением челленджа! До встречи на старте ⚡️",
                              parse_mode='Markdown')
         await message.answer("Получи промокод на скидку 15% для себя и друга по команде /promo",
                              parse_mode='Markdown')
@@ -729,7 +730,8 @@ async def check_result(message: types.Message, session: AsyncSession):
         else:
             await message.answer(f"Поздравляю! Вот твой промокод на скидку 15% для регистрации на RAY Sirius Autodrom:"
                                  f"\n*{promo_code}*"
-                                 f"\nПромокод сработает 2 раза: можно пригласить друга и бежать командой!",
+                                 f"\nПромокод сработает 2 раза: можно пригласить друга и бежать командой!"
+                                 f"\nПромокод действует до 18 марта включительно.",
                                  parse_mode='Markdown')
 
 # """код отмены"""
